@@ -15,6 +15,8 @@ internal static class KynnVoiceSetup
     private const string DriverResourceName = "VBCableZip";
     private const string LicenseResourceName = "KynnVoiceLicense";
     private const string NoticeResourceName = "VBCableNotice";
+    private const string ThirdPartyNoticesResourceName = "KynnVoiceThirdPartyNotices";
+    private const string ThirdPartyLicensesResourceName = "KynnVoiceThirdPartyLicenses";
     private const string AppFileName = "kynn-voice.exe";
     private const string DriverZipFileName = "VBCABLE_Driver_Pack45.zip";
 
@@ -22,6 +24,8 @@ internal static class KynnVoiceSetup
     private const string ExpectedDriverZipSha256 = "__DRIVER_ZIP_SHA256__";
     private const string ExpectedDriverSetupSha256 = "__DRIVER_SETUP_SHA256__";
     private const string ExpectedDriverCatalogSha256 = "__DRIVER_CATALOG_SHA256__";
+    private const string ExpectedThirdPartyNoticesSha256 = "__THIRD_PARTY_NOTICES_SHA256__";
+    private const string ExpectedThirdPartyLicensesSha256 = "__THIRD_PARTY_LICENSES_SHA256__";
 
     [STAThread]
     private static int Main(string[] args)
@@ -73,6 +77,8 @@ internal static class KynnVoiceSetup
             File.WriteAllBytes(installedAppPath, payload.AppBytes);
             File.WriteAllBytes(Path.Combine(installDirectory, "KynnVoice-LICENSE.txt"), payload.LicenseBytes);
             File.WriteAllBytes(Path.Combine(installDirectory, "VB-CABLE-NOTICE.txt"), payload.NoticeBytes);
+            File.WriteAllBytes(Path.Combine(installDirectory, "THIRD_PARTY_NOTICES.md"), payload.ThirdPartyNoticesBytes);
+            File.WriteAllBytes(Path.Combine(installDirectory, "THIRD_PARTY_LICENSES.txt"), payload.ThirdPartyLicensesBytes);
             CreateStartMenuShortcut(installedAppPath);
 
             if (choice == DialogResult.No)
@@ -103,6 +109,8 @@ internal static class KynnVoiceSetup
     {
         AssertHash(payload.AppBytes, ExpectedAppSha256, "Kynn Voice executable");
         AssertHash(payload.DriverZipBytes, ExpectedDriverZipSha256, "VB-CABLE archive");
+        AssertHash(payload.ThirdPartyNoticesBytes, ExpectedThirdPartyNoticesSha256, "Third-party notices");
+        AssertHash(payload.ThirdPartyLicensesBytes, ExpectedThirdPartyLicensesSha256, "Third-party license texts");
 
         using (MemoryStream stream = new MemoryStream(payload.DriverZipBytes, false))
         using (ZipArchive archive = new ZipArchive(stream, ZipArchiveMode.Read, false))
@@ -207,7 +215,7 @@ internal static class KynnVoiceSetup
                 driverProcess.WaitForExit();
 
                 string message = "Kynn Voice foi instalado em:\r\n" + installDirectory + "\r\n\r\n" +
-                    "O instalador oficial do VB-CABLE encerrou com codigo " + driverProcess.ExitCode + ". Confira a confirmacao exibida pelo instalador da VB-Audio. Se o driver foi instalado, reinicie o Windows quando solicitado.";
+                    "O instalador oficial do VB-CABLE encerrou com codigo " + driverProcess.ExitCode + ". Confira a confirmacao exibida pelo instalador da VB-Audio. Se o driver foi instalado, reinicie o Windows antes de usa-lo, conforme orientacao do fabricante.";
                 MessageBox.Show(message, "Kynn Voice Setup", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
         }
@@ -278,6 +286,8 @@ internal static class KynnVoiceSetup
         public byte[] DriverZipBytes;
         public byte[] LicenseBytes;
         public byte[] NoticeBytes;
+        public byte[] ThirdPartyNoticesBytes;
+        public byte[] ThirdPartyLicensesBytes;
         public string NoticeText;
 
         public static Payload Load()
@@ -288,6 +298,8 @@ internal static class KynnVoiceSetup
             payload.DriverZipBytes = ReadResource(assembly, DriverResourceName);
             payload.LicenseBytes = ReadResource(assembly, LicenseResourceName);
             payload.NoticeBytes = ReadResource(assembly, NoticeResourceName);
+            payload.ThirdPartyNoticesBytes = ReadResource(assembly, ThirdPartyNoticesResourceName);
+            payload.ThirdPartyLicensesBytes = ReadResource(assembly, ThirdPartyLicensesResourceName);
             payload.NoticeText = Encoding.UTF8.GetString(payload.NoticeBytes);
             return payload;
         }

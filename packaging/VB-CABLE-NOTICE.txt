@@ -4,7 +4,7 @@ Este pacote contem o VB-CABLE Driver Pack 45 original, da VB-Audio. O arquivo ZI
 
 VB-CABLE e donationware. O usuario pode identificar o fabricante e obter informacoes para contribuir em https://vb-cable.com/ e https://vb-audio.com/Services/licensing.htm.
 
-O instalador oferece separadamente "App + VB-CABLE", "Somente o app" e "Cancelar". O driver so e iniciado se o usuario escolher a primeira opcao e aceitar a solicitacao UAC do Windows. A instalacao do driver pode exigir reinicializacao. O instalador do Kynn Voice nao muda o dispositivo de audio padrao.
+O instalador oferece separadamente "App + VB-CABLE", "Somente o app" e "Cancelar". O driver so e iniciado se o usuario escolher a primeira opcao e aceitar a solicitacao UAC do Windows. A instalacao deve ser seguida de reinicializacao do Windows conforme orientacao do fabricante. O instalador do Kynn Voice nao muda o dispositivo de audio padrao.
 
 DeepFilterNet e ONNX Runtime sao baixados pelo Kynn Voice na primeira utilizacao do modo DeepFilter, com hashes fixados e verificados. O modo RNNoise funciona sem esses downloads.
 

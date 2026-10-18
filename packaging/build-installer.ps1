@@ -24,7 +24,7 @@ if ($AppPath) {
 }
 $releaseDirectory = Join-Path $projectRoot 'target\release'
 $outputPath = Join-Path $releaseDirectory "KynnVoice-Setup-$version-x64.exe"
-$stagePath = Join-Path $releaseDirectory 'kynn-voice-setup-staging'
+$stagePath = Join-Path $releaseDirectory ('kynn-voice-setup-staging-' + [guid]::NewGuid().ToString('N'))
 $auditPath = Join-Path $env:TEMP ('KynnVoice-Setup-Audit-' + [guid]::NewGuid().ToString('N'))
 $csharpCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 
@@ -160,7 +160,7 @@ if (-not $resolvedStage.StartsWith($resolvedRelease, [System.StringComparison]::
     throw "Refusing to write outside the release staging directory: $resolvedStage"
 }
 if (Test-Path -LiteralPath $resolvedStage) {
-    Remove-Item -LiteralPath $resolvedStage -Recurse -Force
+    throw "Refusing to overwrite an existing setup staging directory: $resolvedStage"
 }
 [System.IO.Directory]::CreateDirectory($resolvedStage) | Out-Null
 
@@ -168,15 +168,21 @@ $stageAppPath = Join-Path $resolvedStage 'kynn-voice.exe'
 $stageDriverZipPath = Join-Path $resolvedStage 'VBCABLE_Driver_Pack45.zip'
 $stageLicensePath = Join-Path $resolvedStage 'KynnVoice-LICENSE.txt'
 $stageNoticePath = Join-Path $resolvedStage 'VB-CABLE-NOTICE.txt'
+$stageThirdPartyNoticesPath = Join-Path $resolvedStage 'THIRD_PARTY_NOTICES.md'
+$stageThirdPartyLicensesPath = Join-Path $resolvedStage 'THIRD_PARTY_LICENSES.txt'
 Copy-Item -LiteralPath $appPath -Destination $stageAppPath
 Copy-Item -LiteralPath $DriverArchivePath -Destination $stageDriverZipPath
 Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination $stageLicensePath
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'VB-CABLE-NOTICE.txt') -Destination $stageNoticePath
+Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') -Destination $stageThirdPartyNoticesPath
+Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_LICENSES.txt') -Destination $stageThirdPartyLicensesPath
 
 $expectedSetupSha256 = '734c35dfa6d98f48782a451633ceb471166ec70d60482fd89a1123d0ee3c4f41'
 $expectedCatalogSha256 = '0a921ebadbe39cf3fa7c14ff37d1ca22565a9651244bd3ac177dc810bc99072e'
+$thirdPartyNoticesSha256 = Get-Sha256 -Path $stageThirdPartyNoticesPath
+$thirdPartyLicensesSha256 = Get-Sha256 -Path $stageThirdPartyLicensesPath
 $sourceTemplate = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'KynnVoiceSetup.cs') -Raw
-$source = $sourceTemplate.Replace('__APP_SHA256__', $appSha256).Replace('__DRIVER_ZIP_SHA256__', $expectedDriverZipSha256).Replace('__DRIVER_SETUP_SHA256__', $expectedSetupSha256).Replace('__DRIVER_CATALOG_SHA256__', $expectedCatalogSha256)
+$source = $sourceTemplate.Replace('__APP_SHA256__', $appSha256).Replace('__DRIVER_ZIP_SHA256__', $expectedDriverZipSha256).Replace('__DRIVER_SETUP_SHA256__', $expectedSetupSha256).Replace('__DRIVER_CATALOG_SHA256__', $expectedCatalogSha256).Replace('__THIRD_PARTY_NOTICES_SHA256__', $thirdPartyNoticesSha256).Replace('__THIRD_PARTY_LICENSES_SHA256__', $thirdPartyLicensesSha256)
 $sourcePath = Join-Path $resolvedStage 'KynnVoiceSetup.generated.cs'
 [System.IO.File]::WriteAllText($sourcePath, $source, [System.Text.UTF8Encoding]::new($false))
 
@@ -197,6 +203,8 @@ $compilerArguments = @(
     "/resource:$stageDriverZipPath,VBCableZip",
     "/resource:$stageLicensePath,KynnVoiceLicense",
     "/resource:$stageNoticePath,VBCableNotice",
+    "/resource:$stageThirdPartyNoticesPath,KynnVoiceThirdPartyNotices",
+    "/resource:$stageThirdPartyLicensesPath,KynnVoiceThirdPartyLicenses",
     $sourcePath
 )
 & $csharpCompiler $compilerArguments
@@ -207,6 +215,11 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $outputPath -PathType L
 $payloadCheck = Start-Process -FilePath $outputPath -ArgumentList '--verify-only' -WindowStyle Hidden -Wait -PassThru
 if ($payloadCheck.ExitCode -ne 0) {
     throw "The compiled setup did not pass its embedded payload checks. Exit code: $($payloadCheck.ExitCode)"
+}
+
+$stageLeaf = Split-Path -Leaf $resolvedStage
+if ($resolvedStage.StartsWith($resolvedRelease, [System.StringComparison]::OrdinalIgnoreCase) -and $stageLeaf.StartsWith('kynn-voice-setup-staging-', [System.StringComparison]::OrdinalIgnoreCase)) {
+    Remove-Item -LiteralPath $resolvedStage -Recurse -Force
 }
 
 $outputSha256 = Get-Sha256 -Path $outputPath

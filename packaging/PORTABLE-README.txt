@@ -1,4 +1,4 @@
-Kynn Voice 0.1.4 - Windows x64 / CPU
+Kynn Voice 0.1.5 - Windows x64 / CPU (pacote portatil)
 https://github.com/kynn-dev/kynn-voice
 Fork de danjaniell/noise-gator. Veja LICENSE e os avisos de terceiros incluídos.
 
@@ -10,7 +10,9 @@ desmarque e marque novamente usando a nova cópia.
 As escolhas são salvas em %APPDATA%\noise-gator\config.toml.
 O backup válido anterior fica em config.previous.toml.
 
-VB-CABLE é um pré-requisito externo: https://vb-audio.com/Cable/
+Este pacote portatil nao inclui nem instala o VB-CABLE. Se quiser a instalacao guiada
+com a opcao explicita do driver, use KynnVoice-Setup-0.1.5-x64.exe na release.
+VB-CABLE: https://vb-audio.com/Cable/
 Entrada do app: microfone físico. Saída do app: CABLE Input.
 Discord/jogo: selecionar CABLE Output como microfone.
 Soundboard: enviar os efeitos diretamente ao CABLE Input, fora do supressor.
