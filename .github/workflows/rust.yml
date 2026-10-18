@@ -40,14 +40,20 @@ jobs:
         env:
           FEATURE_SET: ${{ matrix.features }}
         run: |
-          $features = if ($env:FEATURE_SET -eq 'rnnoise-only') { @('--no-default-features') } else { @() }
-          cargo check --all-targets --locked @features
+          if ($env:FEATURE_SET -eq 'rnnoise-only') {
+            cargo check --all-targets --locked --no-default-features
+          } else {
+            cargo check --all-targets --locked
+          }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Unit tests (no devices or startup registration)
         shell: pwsh
         env:
           FEATURE_SET: ${{ matrix.features }}
         run: |
-          $features = if ($env:FEATURE_SET -eq 'rnnoise-only') { @('--no-default-features') } else { @() }
-          cargo test --locked @features
+          if ($env:FEATURE_SET -eq 'rnnoise-only') {
+            cargo test --locked --no-default-features
+          } else {
+            cargo test --locked
+          }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
