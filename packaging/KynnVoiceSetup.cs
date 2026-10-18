@@ -15,13 +15,18 @@ internal static class KynnVoiceSetup
     private const string DriverResourceName = "VBCableZip";
     private const string LicenseResourceName = "KynnVoiceLicense";
     private const string NoticeResourceName = "VBCableNotice";
+    private const string ThirdPartyNoticesResourceName = "KynnVoiceThirdPartyNotices";
+    private const string ThirdPartyLicensesResourceName = "KynnVoiceThirdPartyLicenses";
     private const string AppFileName = "kynn-voice.exe";
     private const string DriverZipFileName = "VBCABLE_Driver_Pack45.zip";
+    private const string DriverAudioWarning = "A propria VB-Audio informa que, no Windows 10/11, o ultimo driver de audio instalado pode ser escolhido automaticamente como dispositivo padrao. Se CABLE Input virar sua saida padrao, o audio do PC vai para o cabo e voce pode deixar de ouvir pelos alto-falantes ou fones. Depois da instalacao e da reinicializacao, confira Configuracoes > Sistema > Som > Saida e selecione manualmente seus alto-falantes ou fones. No Discord ou jogo, use CABLE Output como microfone. O Kynn Voice nao altera esses dispositivos automaticamente.";
 
     private const string ExpectedAppSha256 = "__APP_SHA256__";
     private const string ExpectedDriverZipSha256 = "__DRIVER_ZIP_SHA256__";
     private const string ExpectedDriverSetupSha256 = "__DRIVER_SETUP_SHA256__";
     private const string ExpectedDriverCatalogSha256 = "__DRIVER_CATALOG_SHA256__";
+    private const string ExpectedThirdPartyNoticesSha256 = "__THIRD_PARTY_NOTICES_SHA256__";
+    private const string ExpectedThirdPartyLicensesSha256 = "__THIRD_PARTY_LICENSES_SHA256__";
 
     [STAThread]
     private static int Main(string[] args)
@@ -56,6 +61,19 @@ internal static class KynnVoiceSetup
                 return 0;
             }
 
+            if (choice == DialogResult.Yes)
+            {
+                DialogResult driverConsent = MessageBox.Show(
+                    DriverAudioWarning + "\r\n\r\nDeseja continuar e iniciar o instalador oficial do VB-CABLE?",
+                    "Antes de instalar o VB-CABLE",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+                if (driverConsent != DialogResult.Yes)
+                {
+                    return 0;
+                }
+            }
+
             string processName = Path.GetFileNameWithoutExtension(AppFileName);
             if (Process.GetProcessesByName(processName).Length > 0)
             {
@@ -73,6 +91,8 @@ internal static class KynnVoiceSetup
             File.WriteAllBytes(installedAppPath, payload.AppBytes);
             File.WriteAllBytes(Path.Combine(installDirectory, "KynnVoice-LICENSE.txt"), payload.LicenseBytes);
             File.WriteAllBytes(Path.Combine(installDirectory, "VB-CABLE-NOTICE.txt"), payload.NoticeBytes);
+            File.WriteAllBytes(Path.Combine(installDirectory, "THIRD_PARTY_NOTICES.md"), payload.ThirdPartyNoticesBytes);
+            File.WriteAllBytes(Path.Combine(installDirectory, "THIRD_PARTY_LICENSES.txt"), payload.ThirdPartyLicensesBytes);
             CreateStartMenuShortcut(installedAppPath);
 
             if (choice == DialogResult.No)
@@ -91,7 +111,7 @@ internal static class KynnVoiceSetup
         catch (Exception error)
         {
             MessageBox.Show(
-                "A instalacao nao foi concluida. Nenhum dispositivo de audio padrao foi alterado.\r\n\r\n" + error.Message,
+                "O Setup do Kynn Voice encontrou um erro. Se o instalador do VB-CABLE chegou a ser iniciado, confira manualmente a saida e a entrada em Configuracoes > Sistema > Som.\r\n\r\n" + error.Message,
                 "Kynn Voice Setup",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
@@ -103,6 +123,8 @@ internal static class KynnVoiceSetup
     {
         AssertHash(payload.AppBytes, ExpectedAppSha256, "Kynn Voice executable");
         AssertHash(payload.DriverZipBytes, ExpectedDriverZipSha256, "VB-CABLE archive");
+        AssertHash(payload.ThirdPartyNoticesBytes, ExpectedThirdPartyNoticesSha256, "Third-party notices");
+        AssertHash(payload.ThirdPartyLicensesBytes, ExpectedThirdPartyLicensesSha256, "Third-party license texts");
 
         using (MemoryStream stream = new MemoryStream(payload.DriverZipBytes, false))
         using (ZipArchive archive = new ZipArchive(stream, ZipArchiveMode.Read, false))
@@ -207,8 +229,9 @@ internal static class KynnVoiceSetup
                 driverProcess.WaitForExit();
 
                 string message = "Kynn Voice foi instalado em:\r\n" + installDirectory + "\r\n\r\n" +
-                    "O instalador oficial do VB-CABLE encerrou com codigo " + driverProcess.ExitCode + ". Confira a confirmacao exibida pelo instalador da VB-Audio. Se o driver foi instalado, reinicie o Windows quando solicitado.";
-                MessageBox.Show(message, "Kynn Voice Setup", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    "O instalador oficial do VB-CABLE encerrou com codigo " + driverProcess.ExitCode + ". Confira a confirmacao exibida pelo instalador da VB-Audio. Se o driver foi instalado, reinicie o Windows antes de usa-lo, conforme orientacao do fabricante.\r\n\r\n" +
+                    "Depois da reinicializacao, confira Configuracoes > Sistema > Som > Saida e selecione seus alto-falantes ou fones. O Windows pode ter escolhido o VB-CABLE como dispositivo padrao; se isso ocorrer, o audio do PC nao sera reproduzido nos alto-falantes ate que voce selecione a saida fisica. Para chamadas e jogos, escolha CABLE Output como microfone.";
+                MessageBox.Show(message, "Kynn Voice Setup", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
         catch (System.ComponentModel.Win32Exception error)
@@ -278,6 +301,8 @@ internal static class KynnVoiceSetup
         public byte[] DriverZipBytes;
         public byte[] LicenseBytes;
         public byte[] NoticeBytes;
+        public byte[] ThirdPartyNoticesBytes;
+        public byte[] ThirdPartyLicensesBytes;
         public string NoticeText;
 
         public static Payload Load()
@@ -288,6 +313,8 @@ internal static class KynnVoiceSetup
             payload.DriverZipBytes = ReadResource(assembly, DriverResourceName);
             payload.LicenseBytes = ReadResource(assembly, LicenseResourceName);
             payload.NoticeBytes = ReadResource(assembly, NoticeResourceName);
+            payload.ThirdPartyNoticesBytes = ReadResource(assembly, ThirdPartyNoticesResourceName);
+            payload.ThirdPartyLicensesBytes = ReadResource(assembly, ThirdPartyLicensesResourceName);
             payload.NoticeText = Encoding.UTF8.GetString(payload.NoticeBytes);
             return payload;
         }
@@ -328,12 +355,21 @@ internal static class KynnVoiceSetup
             title.Size = new Size(610, 28);
             Controls.Add(title);
 
+            Label audioWarning = new Label();
+            audioWarning.Text = "Atencao: o Windows 10/11 pode tornar o VB-CABLE a saida padrao depois da instalacao. Se acontecer, voce pode deixar de ouvir pelos alto-falantes. Leia as instrucoes abaixo antes de escolher App + VB-CABLE.";
+            audioWarning.Font = new Font(Font, FontStyle.Bold);
+            audioWarning.ForeColor = Color.DarkRed;
+            audioWarning.AutoSize = false;
+            audioWarning.Location = new Point(20, 48);
+            audioWarning.Size = new Size(610, 54);
+            Controls.Add(audioWarning);
+
             TextBox noticeBox = new TextBox();
             noticeBox.Multiline = true;
             noticeBox.ReadOnly = true;
             noticeBox.ScrollBars = ScrollBars.Vertical;
-            noticeBox.Location = new Point(20, 52);
-            noticeBox.Size = new Size(610, 220);
+            noticeBox.Location = new Point(20, 105);
+            noticeBox.Size = new Size(610, 167);
             noticeBox.Text = notice;
             Controls.Add(noticeBox);
 

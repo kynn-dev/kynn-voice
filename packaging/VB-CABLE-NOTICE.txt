@@ -4,7 +4,15 @@ Este pacote contem o VB-CABLE Driver Pack 45 original, da VB-Audio. O arquivo ZI
 
 VB-CABLE e donationware. O usuario pode identificar o fabricante e obter informacoes para contribuir em https://vb-cable.com/ e https://vb-audio.com/Services/licensing.htm.
 
-O instalador oferece separadamente "App + VB-CABLE", "Somente o app" e "Cancelar". O driver so e iniciado se o usuario escolher a primeira opcao e aceitar a solicitacao UAC do Windows. A instalacao do driver pode exigir reinicializacao. O instalador do Kynn Voice nao muda o dispositivo de audio padrao.
+O instalador oferece separadamente "App + VB-CABLE", "Somente o app" e "Cancelar". O driver so e iniciado se o usuario escolher a primeira opcao e aceitar a solicitacao UAC do Windows. A instalacao deve ser seguida de reinicializacao do Windows conforme orientacao do fabricante. O Kynn Voice nao chama uma alteracao manual dos dispositivos padrao.
+
+ATENCAO SOBRE O AUDIO DO PC
+
+A VB-Audio informa no manual que, no Windows 10/11, o ultimo driver de audio instalado pode ser escolhido automaticamente pelo Windows como dispositivo padrao. Se CABLE Input virar a saida padrao, o audio do computador sera enviado ao cabo e voce podera deixar de ouvir pelos alto-falantes ou fones. O CABLE Output tambem pode aparecer como entrada padrao. O Kynn Voice nao altera esses dispositivos automaticamente.
+
+Depois de reiniciar, abra Configuracoes > Sistema > Som e selecione manualmente seus alto-falantes ou fones em Saida. Escolha a entrada desejada em Entrada. Para receber a voz processada em chamadas e jogos, abra o Kynn Voice e selecione CABLE Output como microfone no aplicativo. Se um programa continuar sem som, confira o Mixer de volume do Windows para verificar se a saida individual dele nao ficou presa ao CABLE Input e reinicie o programa. Se a saida fisica continuar sem audio depois dessas verificacoes, siga o procedimento oficial de desinstalacao da VB-Audio e reinicie o Windows antes de tentar novamente.
+
+Manual oficial do VB-CABLE: https://vb-audio.com/Cable/VBCABLE_ReferenceManual.pdf
 
 DeepFilterNet e ONNX Runtime sao baixados pelo Kynn Voice na primeira utilizacao do modo DeepFilter, com hashes fixados e verificados. O modo RNNoise funciona sem esses downloads.
 

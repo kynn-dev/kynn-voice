@@ -1,24 +1,30 @@
-# Kynn Voice 0.1.4 · Windows x64
+# Kynn Voice 0.1.5 · Windows x64
 
-Processamento local do microfone com RNNoise e DeepFilterNet, interface nativa do Windows e saída para VB-CABLE. Fork de [danjaniell/noise-gator](https://github.com/danjaniell/noise-gator), distribuído sob MIT, com os devidos avisos de terceiros.
+Processamento local do microfone com RNNoise e DeepFilterNet, interface nativa do Windows e saída para VB-CABLE. Fork de [danjaniell/noise-gator](https://github.com/danjaniell/noise-gator), distribuído sob MIT, com os avisos de terceiros preservados.
 
 ## Nesta versão
 
-- Escolhas salvas automaticamente e restauradas ao reabrir, incluindo clareza, dispositivos aplicados e estado ligado/pausado.
-- Opção **Iniciar com o Windows**, por usuário, sem administrador, com confirmação de gravação mesmo ao sair imediatamente após marcar ou desmarcar.
-- UI nativa sem OpenGL; seleção de entrada padrão ou explícita; gerenciamento de streams em segundo plano e proteções de CPU/memória da fase de estabilidade.
-- Leve: RNNoise. Equilibrado: DeepFilterNet. Estúdio: DeepFilterNet com DSP vocal. Um supressor neural por vez; bypass para comparar.
+- Setup Windows `KynnVoice-Setup-0.1.5-x64.exe`, com instalação do aplicativo no perfil do usuário.
+- Escolha explícita entre **App + VB-CABLE**, **Somente o app** e **Cancelar**.
+- Na opção **App + VB-CABLE**, o Setup valida o arquivo original do VB-Audio, solicita UAC e inicia o instalador oficial do VB-CABLE. A instalação deve ser seguida de reinicialização do Windows conforme orientação do fabricante.
+- A confirmação do Setup avisa que o Windows 10/11 pode escolher automaticamente o VB-CABLE como dispositivo padrão. Depois de reiniciar, confira **Configurações > Sistema > Som** e selecione seus alto-falantes/fones como saída; veja também o aviso do VB-CABLE sobre áudio por aplicativo no Mixer de volume.
+- A opção **Somente o app** não instala driver nem altera o dispositivo de áudio padrão. O ZIP portátil e o EXE avulso continuam disponíveis para quem já tem o VB-CABLE ou prefere instalação manual.
+- Arquivo `.sha256` acompanha o Setup. O Setup não possui assinatura Authenticode própria; o hash é uma conferência de integridade.
+- O aviso [VB-CABLE-NOTICE.txt](packaging/VB-CABLE-NOTICE.txt) identifica a origem do Driver Pack 45, a VB-Audio e o caráter donationware.
+- O Setup e o ZIP portátil incluem a licença MIT e os avisos/textos de licença das dependências. O Setup instala esses documentos junto do aplicativo e verifica os hashes antes de mostrar as opções.
 
 ## Download e uso
 
-Baixe o ZIP portátil e extraia numa pasta permanente. Ele inclui executável, instruções e licenças. O EXE avulso também está disponível; os avisos de terceiros correspondentes acompanham a release. Verifique o arquivo baixado com `Get-FileHash -Algorithm SHA256` e `SHA256SUMS.txt`.
+Use o [Setup da release](https://github.com/kynn-dev/kynn-voice/releases/download/v0.1.5/KynnVoice-Setup-0.1.5-x64.exe) para a instalação guiada. Antes de escolher **App + VB-CABLE**, confira a origem e os hashes publicados; o instalador oficial só é iniciado depois da escolha e da confirmação UAC. Se o UAC for cancelado, o app é mantido e o driver não é iniciado.
 
-Encerre a versão antiga pela bandeja antes de abrir. A instalação anterior e seus atalhos não são atualizados por esses arquivos. As escolhas existentes em `%APPDATA%\noise-gator\config.toml` continuam sendo usadas.
+O [ZIP portátil](https://github.com/kynn-dev/kynn-voice/releases/download/v0.1.5/KynnVoice-0.1.5-windows-x64-portable.zip) não contém o driver. Extraia-o numa pasta permanente e abra `kynn-voice.exe`; o EXE avulso é equivalente. Em qualquer opção, selecione `CABLE Output (VB-Audio Virtual Cable)` como microfone no Discord, jogo ou gravador. Uma soundboard deve enviar efeitos diretamente para `CABLE Input`, fora da captura e do processamento neural.
 
-O [VB-CABLE oficial](https://vb-audio.com/Cable/) deve ser instalado separadamente. Esta release não inclui driver. RNNoise está incluído no app. DeepFilterNet usa modelos/runtime oficiais baixados e verificados por SHA-256 no primeiro uso; depois o processamento usa o cache e roda localmente na CPU. O aplicativo não tem assinatura Authenticode própria.
+O arquivo `SHA256SUMS.txt` cobre os artefatos portáteis. O Setup tem um arquivo `.sha256` separado. O Setup não chama uma alteração manual dos dispositivos padrão, mas o Windows pode mudar a saída/entrada padrão ao instalar o novo driver. DeepFilterNet baixa modelos e runtime oficiais fixados e verifica os hashes no primeiro uso; RNNoise funciona sem esses downloads.
 
 ## Validação e limites
 
-Testes no host Windows 11 / Ryzen 7 9700X: build release, 38 testes padrão e 38 sem DeepFilterNet, opt-in de ONNX/registro, persistência após encerramento forçado, cadastro de inicialização pela UI, 50 ciclos de janela e áudio USB → VB-CABLE por 20 segundos em cada modo, sem underruns/drops nessa medição.
+Os testes da fase anterior no host Windows 11 / Ryzen 7 9700X incluíram build release, 38 testes padrão e 38 sem DeepFilterNet, opt-in de ONNX/registro, persistência após encerramento forçado, cadastro de inicialização pela UI, 50 ciclos de janela e áudio USB → VB-CABLE por 20 segundos em cada modo, sem underruns/drops nessa medição.
 
-**Pré-release:** novo logon real do Windows, sessão com League of Legends, uso prolongado, reconexão física USB e avaliação auditiva com soundboard/Discord ainda estão pendentes. Os testes locais não comprovam compatibilidade geral ou resolução definitiva do travamento relatado com o jogo. Detalhes em [STARTUP_PERSISTENCE_REPORT.md](https://github.com/kynn-dev/kynn-voice/blob/master/STARTUP_PERSISTENCE_REPORT.md) e [STABILITY_REPORT.md](https://github.com/kynn-dev/kynn-voice/blob/master/STABILITY_REPORT.md).
+O empacotamento local do Setup foi reconstruído para incluir e validar os avisos de terceiros, além do download oficial do Driver Pack 45, conferência SHA-256 e verificação de assinatura do payload durante o build. Um usuário relatou perda de áudio após instalar o driver usando o Setup; a causa no PC dele não foi reproduzida nem determinada. A VB-Audio documenta que o Windows 10/11 pode selecionar o driver recém-instalado como dispositivo padrão, o que pode silenciar alto-falantes físicos; por isso o Setup agora avisa para verificar a saída e o Mixer de volume após reiniciar. A instalação real em um Windows limpo, a aceitação UAC, a reinicialização pedida pelo fabricante, o novo logon, a sessão com League of Legends, o uso prolongado, a reconexão física USB e a avaliação auditiva com soundboard/Discord continuam **NOT_RUN** para esta versão. Esses artefatos não comprovam compatibilidade geral, assinatura do Setup ou desempenho de ponta a ponta.
+
+Detalhes dos testes anteriores: [STARTUP_PERSISTENCE_REPORT.md](https://github.com/kynn-dev/kynn-voice/blob/master/STARTUP_PERSISTENCE_REPORT.md) e [STABILITY_REPORT.md](https://github.com/kynn-dev/kynn-voice/blob/master/STABILITY_REPORT.md).

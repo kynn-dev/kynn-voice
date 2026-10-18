@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | RNNoise | [Xiph.Org / Jean-Marc Valin e contribuidores](https://github.com/xiph/rnnoise) | BSD-3-Clause; veja os avisos preservados na implementação derivada |
 | nnnoiseless 0.5.2 | [Joe Neeman e contribuidores](https://github.com/jneem/nnnoiseless) | BSD-3-Clause, código e rede padrão usados pelo modo Leve |
-| DeepFilterNet / DeepFilterNet3 | [Hendrik Schröter e contribuidores](https://github.com/Rikorose/DeepFilterNet) | Projeto oferece MIT/Apache-2.0; modelo ONNX baixado do commit fixado pelo app, sem inclusão no ZIP portátil |
-| ONNX Runtime | [Microsoft e contribuidores](https://github.com/microsoft/onnxruntime) | MIT; DLLs CPU baixadas da release oficial verificada, sem inclusão neste ZIP |
+| DeepFilterNet / DeepFilterNet3 | [Hendrik Schröter e contribuidores](https://github.com/Rikorose/DeepFilterNet) | Projeto oferece MIT/Apache-2.0; modelo ONNX baixado do commit fixado pelo app e não incluído nos pacotes |
+| ONNX Runtime | [Microsoft e contribuidores](https://github.com/microsoft/onnxruntime) | MIT; DLLs CPU baixadas da release oficial verificada e não incluídas nos pacotes |
 | ort | [pyke.io e contribuidores](https://github.com/pykeio/ort) | Binding Rust; consulte a licença da versão fixada nos textos abaixo |
 | CPAL, Rubato, ringbuf, windows-rs, winit, tray-icon e demais crates | Respectivos autores, discriminados em `Cargo.lock` e nos textos gerados | Licenças próprias, sem substituição pela licença MIT deste aplicativo |
 
@@ -21,6 +21,6 @@ Os URLs, commits, versões e hashes dos downloads neurais/runtime são fixados e
 
 ## Dispositivo virtual externo
 
-[VB-CABLE](https://vb-audio.com/Cable/) é desenvolvido pela **VB-Audio Software**, com termos próprios. Não faz parte da licença MIT do Kynn Voice. A release pública 0.1.4 contém somente o aplicativo e seus avisos; o usuário obtém o driver pelo site oficial. O código histórico de empacotamento combinado é separado da rota pública de download e não é executado pela CI desta release.
+[VB-CABLE](https://vb-audio.com/Cable/) é desenvolvido pela **VB-Audio Software**, com termos próprios. Não faz parte da licença MIT do Kynn Voice. Na versão 0.1.5, o Setup inclui o Driver Pack 45 original para conveniência e só abre o instalador oficial depois que o usuário escolhe **App + VB-CABLE** e confirma o UAC. O pacote portátil não contém o driver. Ambas as opções incluem este aviso e os textos de licença de terceiros; a instalação segue os termos e as orientações da VB-Audio, inclusive a reinicialização recomendada pelo fabricante.
 
 As marcas e nomes dos projetos pertencem aos respectivos titulares. Não há declaração de afiliação ou endosso ao fork.
