@@ -66,7 +66,7 @@ Um único supressor neural é usado por vez. O bypass mantém o estado do modelo
 5. No Discord, jogo ou gravador, escolha **CABLE Output (VB-Audio Virtual Cable)** como microfone.
 6. Se usar uma soundboard, selecione **CABLE Input** como saída dela.
 
-O Setup não altera o dispositivo de áudio padrão do Windows. O aviso [VB-CABLE-NOTICE.txt](packaging/VB-CABLE-NOTICE.txt) identifica a origem do driver, o caráter donationware e os termos do fabricante. O arquivo ZIP portátil contém somente o aplicativo e os avisos do projeto.
+O Setup não altera diretamente os dispositivos padrão, mas o manual da VB-Audio alerta que o Windows 10/11 pode escolher automaticamente o último driver instalado como padrão. Se, após instalar e reiniciar, você não ouvir pelos alto-falantes/fones, abra **Configurações > Sistema > Som > Saída** e escolha novamente seu dispositivo físico. Confira também o Mixer de volume do Windows para corrigir uma saída atribuída por aplicativo e reabra o programa afetado. Para chamadas e jogos, selecione **CABLE Output** como microfone; deixe seus alto-falantes/fones como saída do sistema. Se a saída física continuar sem áudio, siga o procedimento oficial de desinstalação da VB-Audio e reinicie o Windows antes de tentar novamente. O aviso [VB-CABLE-NOTICE.txt](packaging/VB-CABLE-NOTICE.txt) identifica a origem do driver, o caráter donationware e os termos do fabricante. O arquivo ZIP portátil contém somente o aplicativo e os avisos do projeto.
 
 ## Preferências e logs
 
