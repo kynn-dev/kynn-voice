@@ -1,212 +1,53 @@
-name: CI
+name: Windows CI
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [master, 'codex/**']
   pull_request:
-    branches: [ "master" ]
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-windows:
+  windows:
     runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.85"
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: "v1-rust"
-
-      - name: Check
-        run: cargo check --verbose
-
-      - name: Run tests
-        run: cargo test --verbose
-
-  check-linux:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libglib2.0-dev libasound2-dev pkg-config libssl-dev
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: "1.85"
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: "v1-rust"
-
-      - name: Check (no default features)
-        run: cargo check --no-default-features --verbose
-
-  resolve-version:
-    needs: [ build-windows, check-linux ]
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.next.outputs.next }}
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Read version from Cargo.toml
-        id: version
-        run: |
-          VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/.*"\(.*\)".*/\1/')
-          echo "current=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Current Cargo.toml version: $VERSION"
-
-      - name: Compute next patch version
-        id: next
-        run: |
-          CURRENT="${{ steps.version.outputs.current }}"
-          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -1 || echo "")
-          echo "Latest tag: ${LATEST_TAG:-none}"
-
-          if [ -z "$LATEST_TAG" ]; then
-            NEXT="$CURRENT"
-          else
-            TAG_VER="${LATEST_TAG#v}"
-            MAJOR=$(echo "$TAG_VER" | cut -d. -f1)
-            MINOR=$(echo "$TAG_VER" | cut -d. -f2)
-            PATCH=$(echo "$TAG_VER" | cut -d. -f3)
-            NEXT="${MAJOR}.${MINOR}.$((PATCH + 1))"
-          fi
-
-          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
-          echo "Next version: $NEXT"
-
-  release-build:
-    needs: resolve-version
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: noise-gator.exe
-            ort_platform: win-x64
-            ort_ext: zip
-            ort_lib: onnxruntime.dll
-            platform: windows
-            zip_name: noise-gator-windows.zip
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact: noise-gator
-            ort_platform: osx-arm64
-            ort_ext: tgz
-            ort_lib: libonnxruntime.dylib
-            platform: macos
-            zip_name: noise-gator-macos.zip
-
-    runs-on: ${{ matrix.os }}
-
+        features: [default, rnnoise-only]
     steps:
       - uses: actions/checkout@v5
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.85"
-          targets: ${{ matrix.target }}
-
+          toolchain: '1.99.0'
+          components: rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "v1-rust"
-          key: "release-${{ matrix.platform }}"
-
-      - name: Build release
-        run: cargo build --release --target ${{ matrix.target }} --verbose
-
-      - name: Bundle ONNX Runtime + create release zip
-        uses: ./.github/actions/bundle-ort
-        with:
-          target: ${{ matrix.target }}
-          artifact: ${{ matrix.artifact }}
-          ort_platform: ${{ matrix.ort_platform }}
-          ort_ext: ${{ matrix.ort_ext }}
-          ort_lib: ${{ matrix.ort_lib }}
-          platform: ${{ matrix.platform }}
-          zip_name: ${{ matrix.zip_name }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: noise-gator-${{ matrix.platform }}
-          path: ${{ matrix.zip_name }}
-
-  create-release:
-    needs: [ resolve-version, release-build ]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Bump version, tag, and push
-        id: tag
-        run: |
-          NEXT="${{ needs.resolve-version.outputs.version }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Update Cargo.toml version
-          sed -i "0,/^version = .*/s//version = \"${NEXT}\"/" Cargo.toml
-
-          # Install Rust toolchain for Cargo.lock update
-          rustup default 1.85
-          cargo update --package noise-gator
-
-          git add Cargo.toml Cargo.lock
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: bump version to ${NEXT} [skip ci]"
-          fi
-
-          if git rev-parse "v${NEXT}" >/dev/null 2>&1; then
-            echo "Tag v${NEXT} already exists, skipping"
-            echo "tagged=false" >> "$GITHUB_OUTPUT"
-          else
-            git tag "v${NEXT}"
-            git push origin master --tags
-            echo "tagged=true" >> "$GITHUB_OUTPUT"
-          fi
-          echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/download-artifact@v5
-        if: steps.tag.outputs.tagged == 'true'
-        with:
-          path: artifacts
-
-      - name: Create GitHub Release
-        if: steps.tag.outputs.tagged == 'true'
+          key: windows-${{ matrix.features }}
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Check all targets
+        shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FEATURE_SET: ${{ matrix.features }}
         run: |
-          TAG="v${{ steps.tag.outputs.version }}"
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --generate-notes \
-            artifacts/noise-gator-windows/noise-gator-windows.zip \
-            artifacts/noise-gator-macos/noise-gator-macos.zip
+          $features = if ($env:FEATURE_SET -eq 'rnnoise-only') { @('--no-default-features') } else { @() }
+          cargo check --all-targets --locked @features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Unit tests (no devices or startup registration)
+        shell: pwsh
+        env:
+          FEATURE_SET: ${{ matrix.features }}
+        run: |
+          $features = if ($env:FEATURE_SET -eq 'rnnoise-only') { @('--no-default-features') } else { @() }
+          cargo test --locked @features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

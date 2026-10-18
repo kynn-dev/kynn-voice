@@ -10,6 +10,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::WindowId;
 
+use crate::audio::device;
 use crate::audio::pipeline::Pipeline;
 use crate::config::Config;
 use crate::ui::window::SettingsWindowState;
@@ -17,7 +18,7 @@ use crate::ui::window::SettingsWindowState;
 use menu::MenuState;
 
 /// Run the system tray event loop (blocks until quit).
-pub fn run(pipeline: Arc<Pipeline>, config: Config) -> Result<()> {
+pub fn run(pipeline: Arc<Pipeline>, config: Config, open_settings: bool) -> Result<()> {
     let event_loop = EventLoop::new()?;
 
     let mut app = TrayApp {
@@ -26,7 +27,8 @@ pub fn run(pipeline: Arc<Pipeline>, config: Config) -> Result<()> {
         menu_state: None,
         tray_icon: None,
         settings_window: None,
-        open_settings: false,
+        open_settings,
+        catalog_generation: u64::MAX,
     };
 
     event_loop.run_app(&mut app)?;
@@ -40,6 +42,7 @@ struct TrayApp {
     tray_icon: Option<tray_icon::TrayIcon>,
     settings_window: Option<SettingsWindowState>,
     open_settings: bool,
+    catalog_generation: u64,
 }
 
 impl ApplicationHandler for TrayApp {
@@ -48,6 +51,8 @@ impl ApplicationHandler for TrayApp {
             return; // Already initialized
         }
 
+        device::request_device_refresh();
+
         let (menu, menu_state) = menu::build_menu(&self.config, &self.pipeline);
         self.menu_state = Some(menu_state);
 
@@ -55,7 +60,7 @@ impl ApplicationHandler for TrayApp {
 
         match TrayIconBuilder::new()
             .with_menu(Box::new(menu))
-            .with_tooltip("Noise Gator")
+            .with_tooltip("Kynn Voice")
             .with_icon(icon)
             .build()
         {
@@ -123,10 +128,17 @@ impl ApplicationHandler for TrayApp {
             }
         }
 
-        // Rebuild menu on tray icon click so device list stays fresh
-        // (e.g., Bluetooth headset connected after app started).
-        // This runs AFTER menu event processing to avoid invalidating IDs.
+        let mut rebuild = false;
         while let Ok(_event) = tray_icon::TrayIconEvent::receiver().try_recv() {
+            rebuild = true;
+        }
+        let generation = device::cached_devices().generation;
+        if generation != self.catalog_generation {
+            self.catalog_generation = generation;
+            rebuild = true;
+        }
+        if rebuild {
+            self.config = self.pipeline.to_config(&self.config);
             let (menu, menu_state) = menu::build_menu(&self.config, &self.pipeline);
             self.menu_state = Some(menu_state);
             if let Some(ref tray) = self.tray_icon {
@@ -150,18 +162,29 @@ impl ApplicationHandler for TrayApp {
         }
 
         // Drive meter animation when settings window is open
+        #[cfg(not(target_os = "windows"))]
         if let Some(ref sw) = self.settings_window {
             event_loop.set_control_flow(ControlFlow::wait_duration(Duration::from_millis(33)));
             sw.request_redraw();
         } else {
-            event_loop.set_control_flow(ControlFlow::Wait);
+            event_loop.set_control_flow(ControlFlow::wait_duration(Duration::from_millis(250)));
+        }
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(ref mut sw) = self.settings_window {
+                sw.render();
+                if sw.exit_requested() {
+                    event_loop.exit();
+                }
+            }
+            event_loop.set_control_flow(ControlFlow::wait_duration(Duration::from_millis(250)));
         }
     }
 }
 
 /// Load the pre-sized 32x32 app icon from the embedded PNG for use as the system tray icon.
 fn load_icon() -> tray_icon::Icon {
-    let png_bytes = include_bytes!("../../img/noise-gator-32.png");
+    let png_bytes = include_bytes!("../../img/kynn-voice-32.png");
     let cursor = std::io::Cursor::new(png_bytes.as_slice());
     let decoder = png::Decoder::new(cursor);
     let mut reader = decoder.read_info().expect("Failed to read PNG header");

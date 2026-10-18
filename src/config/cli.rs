@@ -1,4 +1,4 @@
-/// Noise Gator — lightweight real-time microphone noise cancellation.
+/// Kynn Voice — lightweight real-time microphone noise cancellation.
 #[derive(Debug, Default)]
 pub struct Cli {
     /// Input microphone device name
@@ -13,16 +13,18 @@ pub struct Cli {
     pub hard_mode: bool,
     /// List available audio devices and exit
     pub list_devices: bool,
-    /// Skip virtual audio driver check/install
-    pub skip_driver: bool,
-    /// Uninstall the virtual audio driver and exit
-    pub uninstall_driver: bool,
     /// Path to config file (default: platform config dir)
     pub config: Option<String>,
     /// Run headless (no system tray, useful for scripts)
     pub headless: bool,
-    /// Denoise engine: rnnoise (default) or deepfilter
+    /// Processing mode: light, balanced, or studio
+    pub mode: Option<String>,
+    /// Deprecated compatibility alias: rnnoise or deepfilter
     pub engine: Option<String>,
+    /// Controlled Windows UI regression; opens no audio streams.
+    pub ui_smoke_test: bool,
+    pub resource_self_test: bool,
+    pub open_settings: bool,
 }
 
 impl Cli {
@@ -35,22 +37,28 @@ impl Cli {
         }
 
         if pargs.contains(["-V", "--version"]) {
-            println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+            println!("Kynn Voice {}", env!("CARGO_PKG_VERSION"));
             std::process::exit(0);
         }
 
         let cli = Cli {
             input: pargs.opt_value_from_str(["-i", "--input"]).unwrap_or(None),
-            monitor: pargs.opt_value_from_str(["-m", "--monitor"]).unwrap_or(None),
-            virtual_device: pargs.opt_value_from_str(["-v", "--virtual-device"]).unwrap_or(None),
+            monitor: pargs
+                .opt_value_from_str(["-m", "--monitor"])
+                .unwrap_or(None),
+            virtual_device: pargs
+                .opt_value_from_str(["-v", "--virtual-device"])
+                .unwrap_or(None),
             no_denoise: pargs.contains("--no-denoise"),
             hard_mode: pargs.contains("--hard-mode"),
             list_devices: pargs.contains("--list-devices"),
-            skip_driver: pargs.contains("--skip-driver"),
-            uninstall_driver: pargs.contains("--uninstall-driver"),
             config: pargs.opt_value_from_str("--config").unwrap_or(None),
             headless: pargs.contains("--headless"),
+            mode: pargs.opt_value_from_str("--mode").unwrap_or(None),
             engine: pargs.opt_value_from_str("--engine").unwrap_or(None),
+            ui_smoke_test: pargs.contains("--ui-smoke-test"),
+            resource_self_test: pargs.contains("--resource-self-test"),
+            open_settings: pargs.contains("--settings"),
         };
 
         let remaining = pargs.finish();
@@ -80,14 +88,16 @@ OPTIONS:
         --no-denoise             Disable noise cancellation (passthrough mode)
         --hard-mode              Enable aggressive VAD-based noise gate
         --list-devices           List available audio devices and exit
-        --skip-driver            Skip virtual audio driver check/install
-        --uninstall-driver       Uninstall the virtual audio driver and exit
         --config <PATH>          Path to config file (default: platform config dir)
         --headless               Run headless (no system tray, useful for scripts)
-        --engine <ENGINE>        Denoise engine: rnnoise (default) or deepfilter
+        --settings               Open the settings window at startup
+        --ui-smoke-test          Test 50 native windows without opening audio streams
+        --resource-self-test    Verify CPU/memory limits in a standalone process
+        --mode <MODE>            Processing mode: light (default), balanced, or studio
+        --engine <ENGINE>        Deprecated alias: rnnoise or deepfilter
     -h, --help                   Print help
     -V, --version                Print version",
-        name = env!("CARGO_PKG_NAME"),
+        name = "Kynn Voice",
         version = env!("CARGO_PKG_VERSION"),
         desc = env!("CARGO_PKG_DESCRIPTION"),
     );

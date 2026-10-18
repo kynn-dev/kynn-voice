@@ -1,5 +1,5 @@
-name: Bundle ONNX Runtime
-description: Download latest ONNX Runtime and create release zip with binary
+name: Bundle pinned ONNX Runtime
+description: Download and verify the pinned CPU ONNX Runtime release for Windows x64
 
 inputs:
   target:
@@ -7,63 +7,58 @@ inputs:
     description: Rust target triple
   artifact:
     required: true
-    description: Binary filename (e.g., noise-gator.exe)
-  ort_platform:
-    required: true
-    description: ORT platform suffix (e.g., win-x64)
-  ort_ext:
-    required: true
-    description: Archive extension (zip or tgz)
-  ort_lib:
-    required: true
-    description: ORT shared library filename
-  platform:
-    required: true
-    description: Platform name (windows or macos)
+    description: Binary filename
   zip_name:
     required: true
     description: Output zip filename
-  github_token:
-    required: false
-    description: GitHub token for API rate limiting
-    default: ''
 
 runs:
   using: composite
   steps:
-    - name: Download ONNX Runtime (latest)
-      shell: bash
+    - name: Download and verify ONNX Runtime
+      shell: pwsh
       run: |
-        mkdir -p ort-dist ort-extract
-        CURL_AUTH=()
-        if [ -n "${{ inputs.github_token }}" ]; then
-          CURL_AUTH=(-H "Authorization: token ${{ inputs.github_token }}")
-        fi
-        ORT_TAG=$(curl -sL "${CURL_AUTH[@]}" https://api.github.com/repos/microsoft/onnxruntime/releases/latest | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
-        ORT_VER="${ORT_TAG#v}"
-        echo "ONNX Runtime version: $ORT_VER"
-        URL="https://github.com/microsoft/onnxruntime/releases/download/${ORT_TAG}/onnxruntime-${{ inputs.ort_platform }}-${ORT_VER}.${{ inputs.ort_ext }}"
-        echo "Downloading: $URL"
-        curl -sL "${CURL_AUTH[@]}" "$URL" -o "ort-archive.${{ inputs.ort_ext }}"
-        if [[ "${{ inputs.ort_ext }}" == "zip" ]]; then
-          unzip -q "ort-archive.${{ inputs.ort_ext }}" -d ort-extract
-        else
-          tar xzf "ort-archive.${{ inputs.ort_ext }}" -C ort-extract
-        fi
-        find ort-extract -name "${{ inputs.ort_lib }}" -exec cp {} ort-dist/ \;
-        ls -lh ort-dist/
+        $ErrorActionPreference = 'Stop'
+        $version = '1.30.0'
+        $archiveSha256 = 'c6ba983baf5681af108599675d2a89c2d145512d02de28aed0bff177cd0ba949'
+        $dllSha256 = '7e39e2bdbba836d98071ef28620735ba36a47c554cf794585269aecc50fab0da'
+        $providersSha256 = 'b9b7ab9e2a8b08ee7ae4a7ac1c8bfd44a741f17ad8d0f764953140a57de0b796'
+        $archive = 'onnxruntime-win-x64-' + $version + '.zip'
+        $url = 'https://github.com/microsoft/onnxruntime/releases/download/v' + $version + '/' + $archive
 
-    - name: Create release zip
-      shell: bash
+        Invoke-WebRequest -Uri $url -OutFile $archive
+        $actualArchiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+        if ($actualArchiveHash -ne $archiveSha256) {
+          throw "ONNX Runtime archive SHA256 mismatch: $actualArchiveHash"
+        }
+
+        Expand-Archive -LiteralPath $archive -DestinationPath 'ort-extract' -Force
+        $runtime = Get-ChildItem -Path 'ort-extract' -Filter 'onnxruntime.dll' -File -Recurse | Select-Object -First 1
+        if ($null -eq $runtime) {
+          throw 'onnxruntime.dll was not found in the verified archive'
+        }
+        $actualDllHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $runtime.FullName).Hash.ToLowerInvariant()
+        if ($actualDllHash -ne $dllSha256) {
+          throw "ONNX Runtime DLL SHA256 mismatch: $actualDllHash"
+        }
+        $providers = Join-Path $runtime.Directory.FullName 'onnxruntime_providers_shared.dll'
+        if (-not (Test-Path -LiteralPath $providers -PathType Leaf)) {
+          throw 'onnxruntime_providers_shared.dll was not found in the verified archive'
+        }
+        $actualProvidersHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $providers).Hash.ToLowerInvariant()
+        if ($actualProvidersHash -ne $providersSha256) {
+          throw "ONNX Runtime providers DLL SHA256 mismatch: $actualProvidersHash"
+        }
+        New-Item -ItemType Directory -Path 'ort-dist' -Force | Out-Null
+        Copy-Item -LiteralPath $runtime.FullName -Destination 'ort-dist/onnxruntime.dll'
+        Copy-Item -LiteralPath $providers -Destination 'ort-dist/onnxruntime_providers_shared.dll'
+
+    - name: Create Windows release zip
+      shell: pwsh
       run: |
-        mkdir -p release-package
-        cp target/${{ inputs.target }}/release/${{ inputs.artifact }} release-package/
-        cp ort-dist/${{ inputs.ort_lib }} release-package/
-        cd release-package
-        if [[ "${{ inputs.platform }}" == "windows" ]]; then
-          7z a -tzip ../${{ inputs.zip_name }} *
-        else
-          zip ../${{ inputs.zip_name }} *
-        fi
-        cd ..
-        ls -lh ${{ inputs.zip_name }}
+        $ErrorActionPreference = 'Stop'
+        New-Item -ItemType Directory -Path 'release-package' -Force | Out-Null
+        Copy-Item -LiteralPath 'target/${{ inputs.target }}/release/${{ inputs.artifact }}' -Destination 'release-package/'
+        Copy-Item -LiteralPath 'ort-dist/onnxruntime.dll' -Destination 'release-package/'
+        Copy-Item -LiteralPath 'ort-dist/onnxruntime_providers_shared.dll' -Destination 'release-package/'
+        Compress-Archive -Path 'release-package/*' -DestinationPath '${{ inputs.zip_name }}' -Force

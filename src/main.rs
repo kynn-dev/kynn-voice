@@ -5,29 +5,40 @@
 
 mod audio;
 mod config;
-mod driver;
+mod diagnostics;
 mod dsp;
 mod models;
+mod persistence;
+mod resources;
+mod startup;
 mod tray;
 mod ui;
 
 use std::sync::Arc;
 
 use audio::device;
-use audio::pipeline::Pipeline;
+use audio::pipeline::{AUDIO_METRICS, Pipeline};
 use config::cli::Cli;
-use config::{Config, DenoiseEngine, RuntimeSettings};
+use config::{Config, ProcessingMode, RuntimeSettings};
 
 fn main() {
     // Parse CLI first (before logging — --list-devices should be clean)
     let cli = Cli::parse();
 
     // Init logging
+    let log = diagnostics::LogWriter::open().ok();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("noise_gator=info".parse().unwrap()),
+                .add_directive("kynn_voice=info".parse().unwrap()),
         )
+        .with_ansi(false)
+        .with_writer(move || -> Box<dyn std::io::Write> {
+            match &log {
+                Some(log) => Box::new(log.clone()),
+                None => Box::new(std::io::stdout()),
+            }
+        })
         .init();
 
     // ── List devices mode ───────────────────────────────────────────
@@ -36,33 +47,72 @@ fn main() {
         return;
     }
 
-    // ── Single instance guard ──────────────────────────────────────
-    let _instance_guard = enforce_single_instance();
-
-    // ── Uninstall driver mode ───────────────────────────────────────
-    if cli.uninstall_driver {
-        match driver::uninstall() {
-            Ok(()) => println!("Driver uninstalled."),
-            Err(e) => {
-                eprintln!("Failed to uninstall driver: {e}");
-                std::process::exit(1);
+    let _resource_guard = match resources::ResourceGuard::install() {
+        Ok(guard) => guard,
+        Err(error) => {
+            tracing::error!("Cannot enforce process resource limits: {error}");
+            #[cfg(target_os = "windows")]
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+                use windows::core::HSTRING;
+                MessageBoxW(
+                    None,
+                    &HSTRING::from(format!(
+                        "Não foi possível ativar os limites de CPU/memória. Kynn Voice não iniciou o áudio.\n{error}"
+                    )),
+                    &HSTRING::from("Kynn Voice"),
+                    MB_OK | MB_ICONERROR,
+                );
             }
+            std::process::exit(1);
+        }
+    };
+
+    if cli.resource_self_test {
+        #[cfg(target_os = "windows")]
+        if let Err(error) = resources::self_test(&_resource_guard) {
+            eprintln!("Resource self test failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if cli.ui_smoke_test {
+        #[cfg(target_os = "windows")]
+        if let Err(error) = ui::window::smoke_test() {
+            eprintln!("UI smoke test failed: {error}");
+            std::process::exit(1);
         }
         return;
     }
 
+    // ── Single instance guard ──────────────────────────────────────
+    let _instance_guard = enforce_single_instance();
+
     // ── Load config (CLI overrides file) ────────────────────────────
-    let mut config = if let Some(ref path) = cli.config {
-        match config::Config::load_from_path(path) {
+    let config_path = match std::path::absolute(
+        cli.config
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(Config::path),
+    ) {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::error!("Cannot resolve configuration path: {error}");
+            std::process::exit(1);
+        }
+    };
+    let mut config = {
+        match config::Config::load_from_path(&config_path) {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!("Failed to load config from {path}: {e}");
+                tracing::warn!("Failed to load config from {}: {e}", config_path.display());
                 Config::default()
             }
         }
-    } else {
-        Config::load()
     };
+    if let Err(error) = startup::initialize(config_path.clone()) {
+        tracing::warn!("Windows startup option unavailable: {error}");
+    }
 
     // CLI overrides
     if cli.input.is_some() {
@@ -80,83 +130,92 @@ fn main() {
     if cli.hard_mode {
         config.hard_mode = true;
     }
-    if let Some(ref eng) = cli.engine {
-        match eng.to_lowercase().as_str() {
-            "deepfilter" | "deep-filter" | "df" => config.engine = DenoiseEngine::DeepFilter,
-            "rnnoise" | "rnn" => config.engine = DenoiseEngine::RNNoise,
-            other => tracing::warn!("Unknown engine '{other}', using default"),
+    if let Some(ref mode) = cli.mode {
+        match parse_mode(mode) {
+            Some(mode) => config.mode = mode,
+            None => tracing::warn!("Unknown mode '{mode}', using the saved mode"),
+        }
+    } else if let Some(ref engine) = cli.engine {
+        tracing::warn!("--engine is deprecated; use --mode");
+        match engine.to_lowercase().as_str() {
+            "deepfilter" | "deep-filter" | "df" => config.mode = ProcessingMode::Balanced,
+            "rnnoise" | "rnn" => config.mode = ProcessingMode::Light,
+            other => tracing::warn!("Unknown legacy engine '{other}', using the saved mode"),
         }
     }
 
-    // ── Ensure virtual audio driver ─────────────────────────────────
-    if !cli.skip_driver {
-        if let Err(e) = driver::ensure_installed() {
-            tracing::error!("Driver setup failed: {e}");
-            eprintln!(
-                "Virtual audio driver setup failed: {e}\n\
-                 Run with --skip-driver to bypass, or install manually."
-            );
-            std::process::exit(1);
-        }
-    }
-
-    // ── Initialize ONNX Runtime (for DeepFilter) ─────────────────────
-    if config.engine == DenoiseEngine::DeepFilter {
-        if let Err(e) = models::init_ort() {
-            tracing::error!("Failed to initialize ONNX Runtime: {e}");
-            tracing::warn!("Falling back to RNNoise engine");
-            config.engine = DenoiseEngine::RNNoise;
-        }
-    }
+    let config_base = config.clone();
 
     // ── Build pipeline ──────────────────────────────────────────────
     let settings = Arc::new(RuntimeSettings::from_config(&config));
     let pipeline = Arc::new(Pipeline::new(Arc::clone(&settings)));
 
-    // Auto-start the pipeline — fall back to default devices if configured ones
-    // are unavailable (e.g., Bluetooth headset not connected).
-    if let Err(e) = pipeline.start(
-        config.input_device.as_deref(),
-        config.output_device.as_deref(),
-        config.virtual_device.as_deref(),
-    ) {
-        tracing::warn!("Failed to start with configured devices: {e}");
-        tracing::info!("Falling back to default devices");
-        config.input_device = None;
-        config.output_device = None;
-        if let Err(e2) = pipeline.start(None, None, config.virtual_device.as_deref()) {
-            tracing::error!("Failed to start audio pipeline: {e2}");
-            eprintln!("Failed to start: {e2}");
+    // Auto-start. If the selected USB input is not available yet, keep the app
+    // alive and let the watchdog retry the configured device without silently
+    // routing another microphone.
+    if config.start_processing {
+        if let Err(e) = pipeline.start(
+            config.input_device.as_deref(),
+            config.output_device.as_deref(),
+            config.virtual_device.as_deref(),
+        ) {
+            tracing::error!("Audio pipeline is waiting for the configured devices: {e}");
+            eprintln!("Audio pipeline is waiting for the configured devices: {e}");
+        }
+    } else {
+        pipeline.remember_devices(
+            config.input_device.as_deref(),
+            config.output_device.as_deref(),
+            config.virtual_device.as_deref(),
+        );
+        tracing::info!("Restored saved paused audio state");
+    }
+
+    let saved_pipeline = Arc::clone(&pipeline);
+    let saved_base = config_base.clone();
+    let autosave = match persistence::Autosave::start(config_path, move || {
+        saved_pipeline.to_config(&saved_base)
+    }) {
+        Ok(saver) => saver,
+        Err(error) => {
+            tracing::error!("Cannot start settings persistence: {error}");
             std::process::exit(1);
         }
-    }
+    };
 
     // ── Start device watchdog for auto-reconnect ─────────────────
     let _watchdog = Pipeline::start_watchdog(Arc::clone(&pipeline));
 
     // ── Run mode ────────────────────────────────────────────────────
     if cli.headless {
-        run_headless(&pipeline);
-    } else if let Err(e) = tray::run(Arc::clone(&pipeline), config) {
+        run_headless();
+    } else if let Err(e) = tray::run(Arc::clone(&pipeline), config, cli.open_settings) {
         tracing::error!("Tray error: {e}");
         eprintln!("Tray error: {e}");
     }
 
     // Cleanup
-    pipeline.stop();
-    let final_config = pipeline.settings.to_config(&Config::load());
-    if let Err(e) = final_config.save() {
-        tracing::warn!("Failed to save config on exit: {e}");
+    // Flush before stop() changes the desired state. Quit preserves whether the
+    // user had audio enabled; an explicit Stop remains paused next launch.
+    if let Err(error) = startup::flush() {
+        tracing::error!("Could not finish Windows startup change: {error}");
     }
+    autosave.finish();
+    drop(_watchdog);
+    pipeline.stop();
 }
 
 fn print_devices() {
+    match device::audio_host() {
+        Ok(host) => println!("Audio backend: {}", host.id()),
+        Err(e) => eprintln!("Audio backend error: {e}"),
+    }
     println!("=== Input Devices ===");
     match device::list_input_devices() {
         Ok(devices) => {
             for d in &devices {
-                let marker = if d.is_default { " (default)" } else { "" };
-                println!("  {}{}", d.name, marker);
+                println!("  {}", d.display_name());
+                println!("    ID: {}", d.id);
             }
         }
         Err(e) => eprintln!("  Error: {e}"),
@@ -166,8 +225,8 @@ fn print_devices() {
     match device::list_output_devices() {
         Ok(devices) => {
             for d in &devices {
-                let marker = if d.is_default { " (default)" } else { "" };
-                println!("  {}{}", d.name, marker);
+                println!("  {}", d.display_name());
+                println!("    ID: {}", d.id);
             }
         }
         Err(e) => eprintln!("  Error: {e}"),
@@ -175,11 +234,26 @@ fn print_devices() {
 
     if let Some(virt) = device::detect_virtual_device() {
         println!("\n=== Virtual Device ===");
-        println!("  {virt}");
+        let label = device::list_output_devices()
+            .ok()
+            .and_then(|devices| devices.into_iter().find(|device| device.id == virt))
+            .map(|device| device.friendly_name)
+            .unwrap_or_else(|| "VB-CABLE".to_string());
+        println!("  {label}");
+        println!("    ID: {virt}");
     }
 }
 
-fn run_headless(pipeline: &Pipeline) {
+fn parse_mode(value: &str) -> Option<ProcessingMode> {
+    match value.to_ascii_lowercase().as_str() {
+        "light" | "rnnoise" | "rnn" => Some(ProcessingMode::Light),
+        "balanced" | "deepfilter" | "deep-filter" | "df" => Some(ProcessingMode::Balanced),
+        "studio" => Some(ProcessingMode::Studio),
+        _ => None,
+    }
+}
+
+fn run_headless() {
     tracing::info!("Running headless. Press Ctrl+C to stop.");
 
     let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -189,11 +263,62 @@ fn run_headless(pipeline: &Pipeline) {
         r.store(false, std::sync::atomic::Ordering::Relaxed);
     });
 
+    let mut previous_report = std::time::Instant::now();
+    let mut previous_frames = AUDIO_METRICS
+        .processed_frames
+        .load(std::sync::atomic::Ordering::Relaxed);
     while running.load(std::sync::atomic::Ordering::Relaxed) {
         std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+        let now = std::time::Instant::now();
+        if now.duration_since(previous_report) < std::time::Duration::from_secs(1) {
+            continue;
+        }
 
-    pipeline.stop();
+        let processed_frames = AUDIO_METRICS
+            .processed_frames
+            .load(std::sync::atomic::Ordering::Relaxed);
+        tracing::info!(
+            "Audio metrics: frames/s={} total={} frame_us(last/avg/max)={}/{}/{} cpu_estimate_single_core={:.1}% latency_us(last/avg/max)={}/{}/{} input_overrun_frames={} output_underrun_frames={} output_overrun_samples={} output_callback_max_frames={}",
+            processed_frames.saturating_sub(previous_frames),
+            processed_frames,
+            AUDIO_METRICS
+                .frame_last_us
+                .load(std::sync::atomic::Ordering::Relaxed),
+            AUDIO_METRICS
+                .frame_average_us
+                .load(std::sync::atomic::Ordering::Relaxed),
+            AUDIO_METRICS
+                .frame_max_us
+                .load(std::sync::atomic::Ordering::Relaxed),
+            AUDIO_METRICS
+                .dsp_cpu_percent_x10
+                .load(std::sync::atomic::Ordering::Relaxed) as f64
+                / 10.0,
+            AUDIO_METRICS
+                .latency_last_us
+                .load(std::sync::atomic::Ordering::Relaxed),
+            AUDIO_METRICS
+                .latency_average_us
+                .load(std::sync::atomic::Ordering::Relaxed),
+            AUDIO_METRICS
+                .latency_max_us
+                .load(std::sync::atomic::Ordering::Relaxed),
+            AUDIO_METRICS
+                .input_overrun_frames
+                .load(std::sync::atomic::Ordering::Relaxed),
+            AUDIO_METRICS
+                .output_underrun_frames
+                .load(std::sync::atomic::Ordering::Relaxed),
+            AUDIO_METRICS
+                .output_overrun_samples
+                .load(std::sync::atomic::Ordering::Relaxed),
+            AUDIO_METRICS
+                .output_callback_frames_max
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+        previous_frames = processed_frames;
+        previous_report = now;
+    }
 }
 
 fn ctrlc_handler<F: FnOnce() + Send + 'static>(f: F) {
@@ -205,7 +330,7 @@ fn ctrlc_handler<F: FnOnce() + Send + 'static>(f: F) {
     });
 }
 
-/// Ensures only one instance of noise-gator runs at a time.
+/// Ensures only one instance of Kynn Voice runs at a time.
 /// Returns a guard that holds the OS mutex — when dropped (or process exits),
 /// the mutex is released so a new instance can start.
 #[cfg(target_os = "windows")]
@@ -213,7 +338,7 @@ fn enforce_single_instance() -> windows::Win32::Foundation::HANDLE {
     use windows::Win32::System::Threading::CreateMutexW;
     use windows::core::HSTRING;
 
-    let name = HSTRING::from("Global\\NoiseGator_SingleInstance");
+    let name = HSTRING::from("Global\\KynnVoice_SingleInstance");
     let handle = unsafe { CreateMutexW(None, true, &name) };
 
     match handle {
@@ -221,14 +346,14 @@ fn enforce_single_instance() -> windows::Win32::Foundation::HANDLE {
             // If ERROR_ALREADY_EXISTS, another instance owns the mutex
             let last_err = unsafe { windows::Win32::Foundation::GetLastError() };
             if last_err == windows::Win32::Foundation::ERROR_ALREADY_EXISTS {
-                eprintln!("Noise Gator is already running.");
+                eprintln!("Kynn Voice is already running.");
                 std::process::exit(0);
             }
             h
         }
         Err(_) => {
             // CreateMutex failed — another instance likely running, or access denied
-            eprintln!("Noise Gator is already running.");
+            eprintln!("Kynn Voice is already running.");
             std::process::exit(0);
         }
     }
@@ -240,8 +365,7 @@ fn enforce_single_instance() -> std::fs::File {
     use std::io::Write;
     use std::os::unix::io::AsRawFd;
 
-    let lock_path = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| "/tmp".to_string())
+    let lock_path = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string())
         + "/noise-gator.lock";
 
     // Open-or-create the lock file (not truncated — flock is on the fd, not content)
@@ -258,7 +382,7 @@ fn enforce_single_instance() -> std::fs::File {
     // Non-blocking exclusive lock — fails immediately if another instance holds it
     let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
     if rc != 0 {
-        eprintln!("Noise Gator is already running.");
+        eprintln!("Kynn Voice is already running.");
         std::process::exit(0);
     }
 

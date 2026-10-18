@@ -1,118 +1,80 @@
-name: Release (manual)
+name: Build Windows release draft
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build (e.g. v0.1.3). Defaults to latest tag."
-        required: false
+        description: 'Existing version tag, for example v0.1.4'
+        required: true
+        default: v0.1.4
 
-env:
-  CARGO_TERM_COLOR: always
+permissions:
+  contents: read
 
 jobs:
-  resolve-tag:
+  validate:
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.resolve.outputs.tag }}
-
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Resolve tag
-        id: resolve
+      - id: tag
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          if [ -n "${{ inputs.tag }}" ]; then
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            TAG=$(git tag -l 'v*' --sort=-v:refname | head -1)
-            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo 'Expected an existing vMAJOR.MINOR.PATCH tag' >&2
+            exit 1
           fi
-
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
   build:
-    needs: resolve-tag
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            artifact: noise-gator.exe
-            ort_platform: win-x64
-            ort_ext: zip
-            ort_lib: onnxruntime.dll
-            platform: windows
-            zip_name: noise-gator-windows.zip
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            artifact: noise-gator
-            ort_platform: osx-arm64
-            ort_ext: tgz
-            ort_lib: libonnxruntime.dylib
-            platform: macos
-            zip_name: noise-gator-macos.zip
-
-    runs-on: ${{ matrix.os }}
-
+    needs: validate
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ needs.resolve-tag.outputs.tag }}
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+          ref: ${{ needs.validate.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.85"
-          targets: ${{ matrix.target }}
-
+          toolchain: '1.99.0'
+          targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: "v1-rust"
-          key: "release-${{ matrix.platform }}"
-
-      - name: Build release
-        run: cargo build --release --target ${{ matrix.target }} --verbose
-
-      - name: Bundle ONNX Runtime + create release zip
-        uses: ./.github/actions/bundle-ort
+          key: windows-release
+      - name: Build locked Windows executable
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+      - name: Package app, licenses and checksums (no driver)
+        shell: pwsh
+        run: ./packaging/build-portable.ps1 -AppPath ./target/x86_64-pc-windows-msvc/release/kynn-voice.exe -OutputDirectory ./target/public-release
+      - uses: actions/upload-artifact@v5
         with:
-          target: ${{ matrix.target }}
-          artifact: ${{ matrix.artifact }}
-          ort_platform: ${{ matrix.ort_platform }}
-          ort_ext: ${{ matrix.ort_ext }}
-          ort_lib: ${{ matrix.ort_lib }}
-          platform: ${{ matrix.platform }}
-          zip_name: ${{ matrix.zip_name }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: noise-gator-${{ matrix.platform }}
-          path: ${{ matrix.zip_name }}
-
-  create-release:
-    needs: [ resolve-tag, build ]
+          name: kynn-voice-windows-x64
+          path: |
+            target/public-release/*.exe
+            target/public-release/*.zip
+            target/public-release/SHA256SUMS.txt
+            target/public-release/LICENSE
+            target/public-release/THIRD_PARTY_NOTICES.md
+            target/public-release/THIRD_PARTY_LICENSES.txt
+          if-no-files-found: error
+  draft:
+    needs: [validate, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - uses: actions/checkout@v5
-
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
       - uses: actions/download-artifact@v5
         with:
-          path: artifacts
-
-      - name: Create GitHub Release
+          name: kynn-voice-windows-x64
+          path: release-assets
+      - name: Create draft for review
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
         run: |
-          TAG="${{ needs.resolve-tag.outputs.tag }}"
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --generate-notes \
-            artifacts/noise-gator-windows/noise-gator-windows.zip \
-            artifacts/noise-gator-macos/noise-gator-macos.zip
+          gh release create "$RELEASE_TAG" --verify-tag --draft --prerelease \
+            --title "Kynn Voice $RELEASE_TAG · Windows x64" \
+            --notes-file RELEASE_NOTES.md release-assets/*
