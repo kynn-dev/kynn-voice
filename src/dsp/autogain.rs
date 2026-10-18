@@ -64,7 +64,6 @@ impl AutoGain {
         self.enabled = new.enabled;
         self.settings = new;
     }
-
 }
 
 impl Processor for AutoGain {

@@ -1,13 +1,13 @@
 [package]
 name = "noise-gator"
-version = "0.1.2"
+version = "0.1.4"
 edition = "2024"
 rust-version = "1.85"
-description = "Lightweight real-time microphone noise cancellation via system tray"
+description = "Kynn Voice — real-time local microphone noise cancellation"
 license = "MIT"
 
 [[bin]]
-name = "noise-gator"
+name = "kynn-voice"
 path = "src/main.rs"
 
 [dependencies]
@@ -65,20 +65,21 @@ flate2 = { version = "1", optional = true }
 tar = { version = "0.4", optional = true }
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 
-# JSON parsing for GitHub API (only needed for ORT download)
-serde_json = { version = "1", optional = true }
-
 # PNG decoding for tray icon (lightweight, no full image crate)
 png = "0.18"
 
-# Settings window GUI (egui rendered via glow into a glutin-managed GL context)
+# GPU UI is used only outside Windows. Windows settings use native controls,
+# avoiding OpenGL context creation alongside fullscreen games.
+[target.'cfg(not(windows))'.dependencies]
 egui = { version = "0.31", features = ["default_fonts"] }
 egui-winit = "0.31"
 egui_glow = { version = "0.31", features = ["winit"] }
 glow = "0.16"
 glutin = "0.32"
 glutin-winit = "0.5"
-raw-window-handle = "0.6"
+
+[dependencies.raw-window-handle]
+version = "0.6"
 
 # Platform-specific
 [target.'cfg(unix)'.dependencies]
@@ -90,11 +91,19 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
     "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Memory",
+    "Win32_System_Registry",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+    "Win32_UI_Controls",
+    "Win32_Graphics_Gdi",
 ] }
 
 [features]
 default = ["deepfilter"]
-deepfilter = ["dep:ort", "dep:rustfft", "dep:ndarray", "dep:sha2", "dep:flate2", "dep:tar", "dep:zip", "dep:serde_json"]
+deepfilter = ["dep:ort", "dep:rustfft", "dep:ndarray", "dep:sha2", "dep:flate2", "dep:tar", "dep:zip"]
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
@@ -104,7 +113,6 @@ opt-level = 3
 lto = true
 strip = true
 codegen-units = 1
-panic = "abort"
 
 # Fast optimized build for local testing (no LTO)
 # Usage: cargo build --profile dev-release

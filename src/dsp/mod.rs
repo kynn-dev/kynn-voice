@@ -32,4 +32,3 @@ pub fn time_to_coeff(ms: f32) -> f32 {
     }
     (-1.0 / (ms * SAMPLE_RATE / 1000.0)).exp()
 }
-

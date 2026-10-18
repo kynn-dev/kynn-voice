@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use crate::audio::device;
-use crate::audio::pipeline::{AUDIO_LEVEL, OUTPUT_LEVEL, Pipeline};
-use crate::config::{DenoiseEngine, RuntimeSettings};
+use crate::audio::pipeline::{AUDIO_LEVEL, AUDIO_METRICS, OUTPUT_LEVEL, Pipeline};
+use crate::config::{ProcessingMode, RuntimeSettings};
 use crate::dsp::eq::EqSettings;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -108,15 +108,19 @@ impl SettingsApp {
     fn load_devices(&mut self) {
         match device::list_input_devices() {
             Ok(inputs) => {
-                self.ui.input_devices =
-                    inputs.iter().map(|d| (d.name.clone(), d.display_name())).collect();
+                self.ui.input_devices = inputs
+                    .iter()
+                    .map(|d| (d.id.clone(), d.display_name()))
+                    .collect();
             }
             Err(e) => tracing::warn!("Failed to list input devices: {e}"),
         }
         match device::list_output_devices() {
             Ok(outputs) => {
-                self.ui.output_devices =
-                    outputs.iter().map(|d| (d.name.clone(), d.display_name())).collect();
+                self.ui.output_devices = outputs
+                    .iter()
+                    .map(|d| (d.id.clone(), d.display_name()))
+                    .collect();
             }
             Err(e) => tracing::warn!("Failed to list output devices: {e}"),
         }
@@ -128,8 +132,16 @@ impl SettingsApp {
         let input = &self.ui.selected_input;
         let monitor = &self.ui.selected_output;
         if let Err(e) = self.pipeline.start(
-            if input.is_empty() { None } else { Some(input.as_str()) },
-            if monitor.is_empty() { None } else { Some(monitor.as_str()) },
+            if input.is_empty() {
+                None
+            } else {
+                Some(input.as_str())
+            },
+            if monitor.is_empty() {
+                None
+            } else {
+                Some(monitor.as_str())
+            },
             None,
         ) {
             tracing::error!("Pipeline restart failed: {e}");
@@ -147,7 +159,7 @@ impl SettingsApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.heading("Noise Gator");
+                ui.heading("Kynn Voice");
                 ui.add_space(4.0);
 
                 self.render_meters(ui);
@@ -159,9 +171,6 @@ impl SettingsApp {
                 self.render_autogain(ui);
             });
         });
-
-        // Mark settings dirty so audio callback picks up any changes
-        self.settings.mark_dirty();
 
         // Repaints driven by tray event loop (ControlFlow::wait_duration)
     }
@@ -185,6 +194,30 @@ impl SettingsApp {
 
         level_meter(ui, "In", in_norm, in_db);
         level_meter(ui, "Out", out_norm, out_db);
+
+        let frame_us = AUDIO_METRICS.frame_last_us.load(Ordering::Relaxed);
+        let frame_avg_us = AUDIO_METRICS.frame_average_us.load(Ordering::Relaxed);
+        let frame_max_us = AUDIO_METRICS.frame_max_us.load(Ordering::Relaxed);
+        let cpu = AUDIO_METRICS.dsp_cpu_percent_x10.load(Ordering::Relaxed) as f32 / 10.0;
+        let latency_us = AUDIO_METRICS.latency_last_us.load(Ordering::Relaxed);
+        let latency_avg_us = AUDIO_METRICS.latency_average_us.load(Ordering::Relaxed);
+        let latency_max_us = AUDIO_METRICS.latency_max_us.load(Ordering::Relaxed);
+        let underruns = AUDIO_METRICS.output_underrun_frames.load(Ordering::Relaxed);
+        let input_drops = AUDIO_METRICS.input_overrun_frames.load(Ordering::Relaxed);
+        let output_drops = AUDIO_METRICS.output_overrun_samples.load(Ordering::Relaxed);
+        ui.label(format!(
+            "Frame DSP {frame_us} µs / EMA {frame_avg_us} / máx. {frame_max_us} · CPU DSP {cpu:.1}% de 1 núcleo"
+        ));
+        ui.label(format!(
+            "Latência software {latency_us} µs / EMA {latency_avg_us} / máx. {latency_max_us}"
+        ));
+        ui.label(format!(
+            "Underruns {underruns} frames · drops de captura {input_drops} frames · drops de saída {output_drops} amostras"
+        ));
+        ui.label(
+            "Latência medida entre callbacks; não inclui buffers internos do driver/dispositivo.",
+        )
+        .on_hover_text("É uma métrica de software, não latência elétrica de ponta a ponta.");
     }
 
     fn render_devices(&mut self, ui: &mut egui::Ui) {
@@ -199,7 +232,11 @@ impl SettingsApp {
                 ui.horizontal(|ui| {
                     ui.label("Input:");
                     let current_display = if self.ui.selected_input.is_empty() {
-                        "System Default"
+                        if cfg!(target_os = "windows") {
+                            "Auto-detect unique USB microphone"
+                        } else {
+                            "System Default"
+                        }
                     } else {
                         self.ui
                             .input_devices
@@ -217,7 +254,11 @@ impl SettingsApp {
                                 .selectable_value(
                                     &mut self.ui.selected_input,
                                     String::new(),
-                                    "System Default",
+                                    if cfg!(target_os = "windows") {
+                                        "Auto-detect unique USB microphone"
+                                    } else {
+                                        "System Default"
+                                    },
                                 )
                                 .changed()
                             {
@@ -295,35 +336,44 @@ impl SettingsApp {
                 ui.label(egui::RichText::new("Noise Suppression").strong());
             })
             .body(|ui| {
-                // Engine selection
-                let mut current_engine = self.settings.load_engine();
-                let mut engine_changed = false;
-
+                let mut mode = self.settings.load_mode();
                 ui.horizontal(|ui| {
-                    ui.label("Engine:");
-                    if ui
-                        .radio_value(
-                            &mut current_engine,
-                            DenoiseEngine::DeepFilter,
-                            "DeepFilterNet",
-                        )
-                        .changed()
-                    {
-                        engine_changed = true;
-                    }
-                    if ui
-                        .radio_value(&mut current_engine, DenoiseEngine::RNNoise, "RNNoise")
-                        .changed()
-                    {
-                        engine_changed = true;
-                    }
+                    ui.label("Modo:");
+                    ui.radio_value(&mut mode, ProcessingMode::Light, "Leve · RNNoise");
+                    ui.radio_value(
+                        &mut mode,
+                        ProcessingMode::Balanced,
+                        "Equilibrado · DeepFilterNet",
+                    );
+                    ui.radio_value(
+                        &mut mode,
+                        ProcessingMode::Studio,
+                        "Estúdio · DeepFilterNet + voz",
+                    );
                 });
+                if mode != self.settings.load_mode() {
+                    self.settings.mode.store(mode.as_u8(), Ordering::Relaxed);
+                }
 
-                if engine_changed {
+                let active = AUDIO_METRICS.active_mode.load(Ordering::Relaxed);
+                let active_label = if active == u8::MAX {
+                    "carregando ou parado".to_string()
+                } else {
+                    ProcessingMode::from_u8(active).to_string()
+                };
+                ui.label(format!("Modo ativo: {active_label}"));
+
+                let mut denoise_enabled = self.settings.denoise_enabled.load(Ordering::Relaxed);
+                if ui
+                    .checkbox(
+                        &mut denoise_enabled,
+                        "Supressão ligada (desmarque para bypass A/B)",
+                    )
+                    .changed()
+                {
                     self.settings
-                        .engine
-                        .store(current_engine as u8, Ordering::Relaxed);
-                    self.restart_pipeline();
+                        .denoise_enabled
+                        .store(denoise_enabled, Ordering::Relaxed);
                 }
 
                 // Suppression level slider
@@ -354,7 +404,11 @@ impl SettingsApp {
                 let mut gate_enabled = floor < GATE_FLOOR_BYPASS;
 
                 if ui.checkbox(&mut gate_enabled, "Enabled").changed() {
-                    let new_floor = if gate_enabled { GATE_FLOOR_ACTIVE } else { GATE_FLOOR_BYPASS };
+                    let new_floor = if gate_enabled {
+                        GATE_FLOOR_ACTIVE
+                    } else {
+                        GATE_FLOOR_BYPASS
+                    };
                     self.settings
                         .gate_floor
                         .store(new_floor.to_bits(), Ordering::Relaxed);
@@ -389,7 +443,9 @@ impl SettingsApp {
             .body(|ui| {
                 let mut eq_enabled = self.settings.eq_enabled.load(Ordering::Relaxed);
                 if ui.checkbox(&mut eq_enabled, "Enabled").changed() {
-                    self.settings.eq_enabled.store(eq_enabled, Ordering::Relaxed);
+                    self.settings
+                        .eq_enabled
+                        .store(eq_enabled, Ordering::Relaxed);
                 }
 
                 ui.add_enabled_ui(eq_enabled, |ui| {
@@ -419,7 +475,12 @@ impl SettingsApp {
                 self.ui.bass_db = pct * d.bass_db;
                 self.ui.mid_db = pct * d.mid_db;
                 self.ui.treble_db = pct * d.treble_db;
-                store_eq(&self.settings, self.ui.bass_db, self.ui.mid_db, self.ui.treble_db);
+                store_eq(
+                    &self.settings,
+                    self.ui.bass_db,
+                    self.ui.mid_db,
+                    self.ui.treble_db,
+                );
             }
         });
     }
@@ -436,7 +497,12 @@ impl SettingsApp {
         eq_changed |= eq_band_slider(ui, "Treble (6 kHz):", &mut self.ui.treble_db);
 
         if eq_changed {
-            store_eq(&self.settings, self.ui.bass_db, self.ui.mid_db, self.ui.treble_db);
+            store_eq(
+                &self.settings,
+                self.ui.bass_db,
+                self.ui.mid_db,
+                self.ui.treble_db,
+            );
         }
 
         if ui.button("Reset to defaults").clicked() {
@@ -532,7 +598,8 @@ fn level_meter(ui: &mut egui::Ui, label: &str, normalized: f32, db: f32) {
             // Filled portion
             let fill_width = rect.width() * normalized.clamp(0.0, 1.0);
             if fill_width > 0.5 {
-                let fill_rect = egui::Rect::from_min_size(rect.min, egui::vec2(fill_width, bar_height));
+                let fill_rect =
+                    egui::Rect::from_min_size(rect.min, egui::vec2(fill_width, bar_height));
                 painter.rect_filled(fill_rect, 2.0, meter_color(db));
             }
         }
@@ -547,7 +614,11 @@ fn eq_band_slider(ui: &mut egui::Ui, label: &str, value: &mut f32) -> bool {
     ui.horizontal(|ui| {
         ui.label(label);
         if ui
-            .add(egui::Slider::new(value, -12.0..=12.0).step_by(0.5).suffix(" dB"))
+            .add(
+                egui::Slider::new(value, -12.0..=12.0)
+                    .step_by(0.5)
+                    .suffix(" dB"),
+            )
             .changed()
         {
             changed = true;
@@ -614,8 +685,8 @@ mod tests {
         let sensitivity = 60.0;
         let threshold = GATE_THRESHOLD_MAX - (sensitivity / 100.0) * GATE_THRESHOLD_RANGE;
         // Reverse: threshold -> sensitivity
-        let recovered = ((GATE_THRESHOLD_MAX - threshold) / GATE_THRESHOLD_RANGE * 100.0)
-            .clamp(0.0, 100.0);
+        let recovered =
+            ((GATE_THRESHOLD_MAX - threshold) / GATE_THRESHOLD_RANGE * 100.0).clamp(0.0, 100.0);
         assert!((recovered - sensitivity).abs() < 0.01);
     }
 
@@ -629,4 +700,3 @@ mod tests {
         assert!((t100 - 0.05).abs() < f32::EPSILON);
     }
 }
-

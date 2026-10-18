@@ -12,13 +12,13 @@ pub const FRAME_SIZE: usize = nnnoiseless::FRAME_SIZE;
 pub struct Denoiser {
     state: Box<DenoiseState<'static>>,
     out_buf: Vec<f32>,
+    #[cfg(test)]
+    processed_frames: usize,
 }
 
 // SAFETY: DenoiseState is !Send because nnnoiseless uses internal raw pointers
-// for FFT buffers. However, each Denoiser instance is exclusively owned by a
-// single audio callback closure (captured by `move`). It is never shared across
-// threads — it's created before the closure and moved into it. The &mut self
-// on process_frame guarantees exclusive access.
+// for FFT buffers. Each Denoiser is moved into the dedicated DSP worker and is
+// never shared across threads; &mut self guarantees exclusive access.
 unsafe impl Send for Denoiser {}
 
 impl Denoiser {
@@ -26,6 +26,8 @@ impl Denoiser {
         Self {
             state: DenoiseState::new(),
             out_buf: vec![0.0; FRAME_SIZE],
+            #[cfg(test)]
+            processed_frames: 0,
         }
     }
 
@@ -37,6 +39,10 @@ impl Denoiser {
         }
 
         let vad = self.state.process_frame(&mut self.out_buf, frame);
+        #[cfg(test)]
+        {
+            self.processed_frames += 1;
+        }
         frame.copy_from_slice(&self.out_buf);
 
         // Scale back to f32 range
@@ -68,6 +74,10 @@ impl Processor for Denoiser {
     fn reset(&mut self) {
         self.state = DenoiseState::new();
         self.out_buf.fill(0.0);
+        #[cfg(test)]
+        {
+            self.processed_frames = 0;
+        }
     }
 }
 
@@ -115,6 +125,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rnnoise_instance_keeps_state_across_successive_frames_until_reset() {
+        let mut denoiser = Denoiser::new();
+        for frame_index in 0..3 {
+            let mut frame = [0.0f32; FRAME_SIZE];
+            for (sample_index, sample) in frame.iter_mut().enumerate() {
+                let phase = (sample_index + frame_index * FRAME_SIZE) as f32;
+                *sample = (phase * 0.017).sin() * 0.2;
+            }
+            denoiser.process(&mut frame);
+            assert_eq!(denoiser.processed_frames, frame_index + 1);
+        }
+
+        denoiser.reset();
+        assert_eq!(denoiser.processed_frames, 0);
+    }
+
+    #[test]
     fn dual_pass_processes_without_panic() {
         let mut dp = DualPassDenoiser::new();
         let mut samples = [0.1f32; FRAME_SIZE];
@@ -150,7 +177,10 @@ mod tests {
         dual.process(&mut dual_out);
 
         // They should produce different output (dual-pass applies more suppression)
-        let differs = single_out.iter().zip(&dual_out).any(|(a, b)| (a - b).abs() > 1e-10);
+        let differs = single_out
+            .iter()
+            .zip(&dual_out)
+            .any(|(a, b)| (a - b).abs() > 1e-10);
         assert!(differs, "Dual-pass should differ from single-pass");
     }
 }

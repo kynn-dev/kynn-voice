@@ -10,7 +10,9 @@ use std::sync::Arc;
 use egui_glow::EguiGlow;
 use glow::HasContext as _;
 use glutin::config::ConfigTemplateBuilder;
-use glutin::context::{ContextApi, ContextAttributesBuilder, NotCurrentGlContext, PossiblyCurrentGlContext};
+use glutin::context::{
+    ContextApi, ContextAttributesBuilder, NotCurrentGlContext, PossiblyCurrentGlContext,
+};
 use glutin::display::{GetGlDisplay, GlDisplay};
 use glutin::surface::GlSurface;
 use raw_window_handle::HasWindowHandle;
@@ -45,7 +47,7 @@ impl GlutinContext {
             .with_resizable(true)
             .with_inner_size(winit::dpi::LogicalSize::new(400.0_f64, 550.0))
             .with_min_inner_size(winit::dpi::LogicalSize::new(350.0_f64, 400.0))
-            .with_title("Noise Gator Settings")
+            .with_title("Kynn Voice Settings")
             .with_visible(false);
 
         let config_template = ConfigTemplateBuilder::new()

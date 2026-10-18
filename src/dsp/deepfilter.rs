@@ -50,8 +50,8 @@ mod inner {
 
     /// ERB band edges for 32 bands at 48kHz with FFT size 960.
     static ERB_WIDTHS: [usize; NB_ERB] = [
-        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10, 12, 13, 15, 17, 20,
-        23, 26, 30, 35, 39,
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10, 12, 13, 15, 17, 20, 23,
+        26, 30, 35, 39,
     ];
 
     pub struct DeepFilterProcessor {
@@ -83,12 +83,20 @@ mod inner {
         // Error tracking
         error_count: usize,
         // Pre-allocated encoder output buffers (avoids heap alloc per frame)
-        enc_e0_shape: Vec<usize>, enc_e0_data: Vec<f32>,
-        enc_e1_shape: Vec<usize>, enc_e1_data: Vec<f32>,
-        enc_e2_shape: Vec<usize>, enc_e2_data: Vec<f32>,
-        enc_e3_shape: Vec<usize>, enc_e3_data: Vec<f32>,
-        enc_emb_shape: Vec<usize>, enc_emb_data: Vec<f32>,
-        enc_c0_shape: Vec<usize>, enc_c0_data: Vec<f32>,
+        erb_input: Array4<f32>,
+        spec_input: Array4<f32>,
+        enc_e0_shape: Vec<usize>,
+        enc_e0_data: Vec<f32>,
+        enc_e1_shape: Vec<usize>,
+        enc_e1_data: Vec<f32>,
+        enc_e2_shape: Vec<usize>,
+        enc_e2_data: Vec<f32>,
+        enc_e3_shape: Vec<usize>,
+        enc_e3_data: Vec<f32>,
+        enc_emb_shape: Vec<usize>,
+        enc_emb_data: Vec<f32>,
+        enc_c0_shape: Vec<usize>,
+        enc_c0_data: Vec<f32>,
         // Pre-allocated decoder output buffers
         erb_gains: Vec<f32>,
         df_coefs: Vec<[Complex32; DF_ORDER]>,
@@ -123,16 +131,28 @@ mod inner {
             let encoder = Session::builder()?
                 .with_optimization_level(GraphOptimizationLevel::Level3)?
                 .with_intra_threads(1)?
+                .with_inter_threads(1)?
+                .with_parallel_execution(false)?
+                .with_intra_op_spinning(false)?
+                .with_inter_op_spinning(false)?
                 .commit_from_file(&enc_path)?;
 
             let erb_decoder = Session::builder()?
                 .with_optimization_level(GraphOptimizationLevel::Level3)?
                 .with_intra_threads(1)?
+                .with_inter_threads(1)?
+                .with_parallel_execution(false)?
+                .with_intra_op_spinning(false)?
+                .with_inter_op_spinning(false)?
                 .commit_from_file(&erb_dec_path)?;
 
             let df_decoder = Session::builder()?
                 .with_optimization_level(GraphOptimizationLevel::Level3)?
                 .with_intra_threads(1)?
+                .with_inter_threads(1)?
+                .with_parallel_execution(false)?
+                .with_intra_op_spinning(false)?
+                .with_inter_op_spinning(false)?
                 .commit_from_file(&df_dec_path)?;
 
             // Log model info
@@ -151,7 +171,8 @@ mod inner {
             // analysis * synthesis must satisfy COLA for perfect reconstruction.
             let analysis_window: Vec<f32> = (0..FFT_SIZE)
                 .map(|n| {
-                    let hann = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * n as f32 / FFT_SIZE as f32).cos());
+                    let hann = 0.5
+                        * (1.0 - (2.0 * std::f32::consts::PI * n as f32 / FFT_SIZE as f32).cos());
                     hann.sqrt()
                 })
                 .collect();
@@ -180,12 +201,20 @@ mod inner {
                 frame_count: 0,
                 error_count: 0,
                 // Pre-allocated encoder output buffers
-                enc_e0_shape: Vec::with_capacity(4), enc_e0_data: Vec::with_capacity(256),
-                enc_e1_shape: Vec::with_capacity(4), enc_e1_data: Vec::with_capacity(256),
-                enc_e2_shape: Vec::with_capacity(4), enc_e2_data: Vec::with_capacity(256),
-                enc_e3_shape: Vec::with_capacity(4), enc_e3_data: Vec::with_capacity(256),
-                enc_emb_shape: Vec::with_capacity(4), enc_emb_data: Vec::with_capacity(256),
-                enc_c0_shape: Vec::with_capacity(4), enc_c0_data: Vec::with_capacity(256),
+                erb_input: Array4::zeros((1, 1, 1, NB_ERB)),
+                spec_input: Array4::zeros((1, 2, 1, NB_DF)),
+                enc_e0_shape: Vec::with_capacity(4),
+                enc_e0_data: Vec::with_capacity(256),
+                enc_e1_shape: Vec::with_capacity(4),
+                enc_e1_data: Vec::with_capacity(256),
+                enc_e2_shape: Vec::with_capacity(4),
+                enc_e2_data: Vec::with_capacity(256),
+                enc_e3_shape: Vec::with_capacity(4),
+                enc_e3_data: Vec::with_capacity(256),
+                enc_emb_shape: Vec::with_capacity(4),
+                enc_emb_data: Vec::with_capacity(256),
+                enc_c0_shape: Vec::with_capacity(4),
+                enc_c0_data: Vec::with_capacity(256),
                 // Pre-allocated decoder output buffers
                 erb_gains: Vec::with_capacity(NB_ERB),
                 df_coefs: vec![[Complex32::new(0.0, 0.0); DF_ORDER]; NB_DF],
@@ -194,6 +223,12 @@ mod inner {
 
         pub fn is_failed(&self) -> bool {
             self.error_count >= MAX_ERRORS
+        }
+
+        /// Number of consecutive 10 ms frames processed successfully by this
+        /// processor instance. Useful for the opt-in streaming-state test.
+        pub fn frames_processed(&self) -> usize {
+            self.frame_count
         }
 
         fn process_frame(&mut self, frame: &mut [f32]) {
@@ -243,6 +278,7 @@ mod inner {
                 tracing::error!("DF decoder failed: {e}");
                 tracing::warn!("Falling back to ERB-only enhancement");
                 self.synthesize(frame);
+                self.error_count += 1;
                 return;
             }
 
@@ -292,29 +328,59 @@ mod inner {
             features
         }
 
-        fn run_encoder(
-            &mut self,
-            erb: &[f32; NB_ERB],
-            spec: &[[f32; 2]; NB_DF],
-        ) -> Result<()> {
-            let erb_array = Array4::from_shape_fn((1, 1, 1, NB_ERB), |(_, _, _, i)| erb[i]);
-            let spec_array =
-                Array4::from_shape_fn((1, 2, 1, NB_DF), |(_, ch, _, i)| spec[i][ch]);
+        fn run_encoder(&mut self, erb: &[f32; NB_ERB], spec: &[[f32; 2]; NB_DF]) -> Result<()> {
+            for i in 0..NB_ERB {
+                self.erb_input[[0, 0, 0, i]] = erb[i];
+            }
+            for i in 0..NB_DF {
+                self.spec_input[[0, 0, 0, i]] = spec[i][0];
+                self.spec_input[[0, 1, 0, i]] = spec[i][1];
+            }
 
-            let erb_ref = TensorRef::from_array_view(erb_array.view())?;
-            let spec_ref = TensorRef::from_array_view(spec_array.view())?;
+            let erb_ref = TensorRef::from_array_view(self.erb_input.view())?;
+            let spec_ref = TensorRef::from_array_view(self.spec_input.view())?;
 
             let outputs = self.encoder.run(ort::inputs![
                 "feat_erb" => erb_ref,
                 "feat_spec" => spec_ref
             ])?;
 
-            extract_output_into(&outputs, "e0", &mut self.enc_e0_shape, &mut self.enc_e0_data)?;
-            extract_output_into(&outputs, "e1", &mut self.enc_e1_shape, &mut self.enc_e1_data)?;
-            extract_output_into(&outputs, "e2", &mut self.enc_e2_shape, &mut self.enc_e2_data)?;
-            extract_output_into(&outputs, "e3", &mut self.enc_e3_shape, &mut self.enc_e3_data)?;
-            extract_output_into(&outputs, "emb", &mut self.enc_emb_shape, &mut self.enc_emb_data)?;
-            extract_output_into(&outputs, "c0", &mut self.enc_c0_shape, &mut self.enc_c0_data)?;
+            extract_output_into(
+                &outputs,
+                "e0",
+                &mut self.enc_e0_shape,
+                &mut self.enc_e0_data,
+            )?;
+            extract_output_into(
+                &outputs,
+                "e1",
+                &mut self.enc_e1_shape,
+                &mut self.enc_e1_data,
+            )?;
+            extract_output_into(
+                &outputs,
+                "e2",
+                &mut self.enc_e2_shape,
+                &mut self.enc_e2_data,
+            )?;
+            extract_output_into(
+                &outputs,
+                "e3",
+                &mut self.enc_e3_shape,
+                &mut self.enc_e3_data,
+            )?;
+            extract_output_into(
+                &outputs,
+                "emb",
+                &mut self.enc_emb_shape,
+                &mut self.enc_emb_data,
+            )?;
+            extract_output_into(
+                &outputs,
+                "c0",
+                &mut self.enc_c0_shape,
+                &mut self.enc_c0_data,
+            )?;
             Ok(())
         }
 
@@ -452,6 +518,61 @@ mod inner {
 
 #[cfg(feature = "deepfilter")]
 pub use inner::DeepFilterProcessor;
+
+#[cfg(all(test, feature = "deepfilter"))]
+mod tests {
+    use super::*;
+    use crate::dsp::denoise::FRAME_SIZE;
+    use std::time::Instant;
+
+    /// Runs only when explicitly requested because it needs the verified model
+    /// assets, native ONNX Runtime, and actual CPU inference.
+    #[test]
+    #[ignore = "requires verified DeepFilterNet and ONNX Runtime assets; run explicitly on a supported host"]
+    fn deepfilter_keeps_streaming_state_between_frames() {
+        crate::models::init_ort().expect("initialize pinned ONNX Runtime");
+        let model_dir = crate::models::ensure_deepfilter_model().expect("verified model assets");
+        let mut processor = DeepFilterProcessor::from_model_dir(&model_dir).expect("load sessions");
+
+        const WARMUP_FRAMES: usize = 10;
+        const MEASURED_FRAMES: usize = 200;
+        let mut process_times_us = Vec::with_capacity(MEASURED_FRAMES);
+
+        for frame_index in 0..WARMUP_FRAMES + MEASURED_FRAMES {
+            let mut frame = [0.0f32; FRAME_SIZE];
+            for (sample_index, sample) in frame.iter_mut().enumerate() {
+                let phase = (sample_index + frame_index * FRAME_SIZE) as f32;
+                *sample = (phase * 0.013).sin() * 0.15;
+            }
+
+            let started = Instant::now();
+            processor.process(&mut frame);
+            let elapsed_us = started.elapsed().as_micros() as u64;
+            assert!(frame.iter().all(|sample| sample.is_finite()));
+            assert_eq!(processor.frames_processed(), frame_index + 1);
+
+            if frame_index >= WARMUP_FRAMES {
+                process_times_us.push(elapsed_us);
+            }
+        }
+
+        process_times_us.sort_unstable();
+        let total_us: u128 = process_times_us.iter().map(|&time| u128::from(time)).sum();
+        let average_us = total_us / process_times_us.len() as u128;
+        let p50_us = process_times_us[process_times_us.len() / 2];
+        let p95_index = (process_times_us.len() * 95).div_ceil(100) - 1;
+        let p95_us = process_times_us[p95_index];
+        let max_us = *process_times_us.last().expect("measured frames");
+
+        eprintln!(
+            "DeepFilter CPU inference: {MEASURED_FRAMES} measured 10 ms frames after {WARMUP_FRAMES} warmup; avg={average_us} µs p50={p50_us} µs p95={p95_us} µs max={max_us} µs; estimated single-core load at 100 FPS={:.1}%",
+            average_us as f64 / 100.0
+        );
+
+        processor.reset();
+        assert_eq!(processor.frames_processed(), 0);
+    }
+}
 
 // ── Stub when deepfilter feature is disabled ────────────────────────────
 
